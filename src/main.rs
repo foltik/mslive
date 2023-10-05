@@ -1,105 +1,54 @@
-use std::{time::Duration, collections::VecDeque, thread};
+use std::{time::Duration, thread};
 use color_eyre::Result;
-use rand::Rng;
 
-use stagebridge::midi::{Midi, device::launchpad_x::{*, types::*}};
+use stagebridge::{midi::{Midi, device::launchpad_x::LaunchpadX}, num::Float};
 
-enum Direction {
-    Left,
-    Right,
-    Up,
-    Down,
-}
+// mod lights; use lights::*;
+// mod logic; use logic::*;
+mod state; use state::*;
+mod color; use color::*;
+mod fx;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
     pretty_env_logger::init();
 
-    let mut rng = rand::thread_rng();
-    let mut rand_pos = move || Coord(rng.gen_range(0..8), rng.gen_range(0..8));
-
     let mut pad = Midi::connect("Launchpad X:Launchpad X LPX MIDI", LaunchpadX::default())?;
-    pad.send(Output::Mode(Mode::Programmer));
-    pad.send(Output::Pressure(Pressure::Off, PressureCurve::Medium));
-    pad.send(Output::Clear);
+    {
+        use stagebridge::midi::device::launchpad_x::{*, types::*};
+        pad.send(Output::Mode(Mode::Programmer));
+        pad.send(Output::Pressure(Pressure::Off, PressureCurve::Medium));
+        pad.send(Output::Clear);
 
-    // background color
-    pad.send(Output::ClearColor(Color::Palette(PaletteColor::Index(1))));
-    // arrow keys color
-    pad.send(Output::Light(Coord(0, 8).into(), PaletteColor::Index(41)));
-    pad.send(Output::Light(Coord(1, 8).into(), PaletteColor::Index(41)));
-    pad.send(Output::Light(Coord(2, 8).into(), PaletteColor::Index(41)));
-    pad.send(Output::Light(Coord(3, 8).into(), PaletteColor::Index(41)));
+    }
 
-    let mut dir = Direction::Right;
-    let mut snake = VecDeque::from_iter([Coord(0, 0)]);
-    let mut fruit = rand_pos();
-
-    // initial fruit color
-    pad.send(Output::Light(fruit.into(), PaletteColor::Index(5)));
+    let mut s = State::default();
 
     loop {
-        for input in pad.recv() {
-            match input {
-                Input::Up(true) => { dir = Direction::Up; },
-                Input::Down(true) => { dir = Direction::Down; },
-                Input::Left(true) => { dir = Direction::Left; },
-                Input::Right(true) => { dir = Direction::Right; },
-                _ => {}
-            }
-        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
 
-        let Coord(mut x, mut y) = snake.front().unwrap();
-        let (dx, dy) = match dir {
-            Direction::Left => (-1, 0),
-            Direction::Right => (1, 0),
-            Direction::Up => (0, 1),
-            Direction::Down => (0, -1),
-        };
+impl State {
+    pub fn phi(&self, pd: Pd) -> f64 {
+        self.phi.mod_div(pd.fr() * self.phi_mul)
+    }
 
-        // wrap X
-        x += dx;
-        if x > 7 {
-            x = 0;
-        }
-        if x < 0 {
-            x = 7;
-        }
+    pub fn color0(&self) -> Color {
+        self.map0.apply(self, self.color0.apply(self))
+    }
+    pub fn color1(&self) -> Color {
+        self.map1.apply(self, self.color1.apply(self))
+    }
 
-        // wrap Y
-        y += dy;
-        if y > 7 {
-            y = 0;
-        }
-        if y < 0 {
-            y = 7;
-        }
-
-        // push new head
-        let head = Coord(x, y);
-        snake.push_front(head);
-        pad.send(Output::Light(head.into(), PaletteColor::Index(21)));
-
-        if head == fruit {
-            // if we ate a fruit, move it
-            fruit = rand_pos();
-            let mut good = true;
-            while !good {
-                for c in &snake {
-                    good = good && fruit != *c;
-                }
-
-                if !good {
-                    fruit = rand_pos();
-                }
-            }
-            pad.send(Output::Light(fruit.into(), PaletteColor::Index(5)));
-        } else {
-            // otherwise, move the tail forward
-            let tail = snake.pop_back().unwrap();
-            pad.send(Output::Light(tail.into(), PaletteColor::Index(1)));
-        }
-
-        thread::sleep(Duration::from_millis(500));
+    pub fn color0_phase(&self, pd: Pd, offset: f64) -> Color {
+        let mut state = self.clone();
+        state.phi = state.phi.phase(pd.fr(), offset);
+        self.map0.apply(&state, self.color0.apply(&state))
+    }
+    pub fn color1_phase(&self, pd: Pd, offset: f64) -> Color {
+        let mut state = self.clone();
+        state.phi = state.phi.phase(pd.fr(), offset);
+        self.map1.apply(&state, self.color1.apply(&state))
     }
 }
