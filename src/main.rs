@@ -7,6 +7,7 @@
 
 use color_eyre::Result;
 use itertools::Itertools;
+use rand::seq::SliceRandom;
 use stagebridge::color::Rgbw;
 use stagebridge::dmx::device::laser_scan_30w::{LaserPattern, LaserColor};
 use std::time::Instant;
@@ -41,9 +42,6 @@ pub struct State {
     t_mod: f64,
     phi_mod: f64,
 
-    // special case modes
-    special: Special,
-
     // envelopes
     env0: Op<f64>,
     env1: Op<f64>,
@@ -62,17 +60,16 @@ pub struct State {
     beat0: Beat,
     beat1: Beat,
 
+    // light source / pos
+    par_src: Source,
+    par_src_h: Hold<Source>,
+    strobe_src: Source,
+    strobe_src_h: Hold<Source>,
+
     off: bool,
     alpha: f64,
     alpha_up: bool,
     alpha_down: bool,
-}
-
-#[derive(Clone, Default)]
-enum Special {
-    #[default]
-    None,
-    // Chase { order: Vec<usize> },
 }
 
 ///////////////////////// PAD /////////////////////////
@@ -82,7 +79,6 @@ fn on_pad(
     s: &mut State,
     l: &mut Lights,
     pad: &mut Midi<LaunchpadX>,
-    ctrl: &mut Midi<LaunchControlXL>,
 ) {
     use launchpad_x::{types::*, *};
 
@@ -91,6 +87,11 @@ fn on_pad(
         Input::Up(b) => s.alpha_up = b,
         Input::Down(b) => s.alpha_down = b,
         Input::Left(true) => s.alpha = 1.0,
+        Input::Right(true) => s.alpha = 0.75,
+        Input::Session(true) => s.alpha = 0.5,
+        Input::Note(true) => s.alpha = 0.25,
+        Input::Custom(true) => s.alpha = 0.1,
+        Input::Capture(true) => s.alpha = 0.0,
         _ => {},
     }
 
@@ -124,15 +125,27 @@ fn on_pad(
                     }
                 }
 
-                // slow envs
-                (3, 0) => s.env(|_| 0.1),
+                // slow presets
+                (3, 0) => {
+                    s.env(|_| 0.1);
+                    l.beam_pos = BeamPos::Down;
+                },
                 (3, 1) => {},
-                (3, 2) => s.env(|s| s.phi(1, 1).ramp(1.0).inv().lerp(0.2..0.3)),
+                (3, 2) => {
+                    s.env(|s| s.phi(1, 1).ramp(1.0).inv().lerp(0.2..0.3));
+                    l.beam_pos = BeamPos::WaveY { pd: Pd(8, 1) };
+                },
 
-                // fast envs
-                (4, 0) => s.env(|_| 0.4),
+                // fast presets
+                (4, 0) => {
+                    s.env(|_| 0.4);
+                    l.beam_pos = BeamPos::WaveY { pd: Pd(8, 1) };
+                },
                 (4, 1) => {},
-                (4, 2) => s.env(|s| s.phi(1, 1).ramp(1.0).inv().lerp(0.2..0.5)),
+                (4, 2) => {
+                    s.env(|s| s.phi(1, 1).ramp(1.0).inv().lerp(0.2..0.5));
+                    l.beam_pos = BeamPos::Square { pd: Pd(8, 1) };
+                },
 
                 // mod colors
                 (0, 0) => s.c(Rgbw::BLACK),
@@ -141,7 +154,7 @@ fn on_pad(
 
                 // blue/green colors
                 (1, 0) => s.c(Rgbw::BLUE),
-                (1, 1) => s.cc(Rgbw::PBLUE, Rgbw::PBLUE),
+                (2, 4) => s.cc(Rgbw::VIOLET, Rgbw::BLUE),
                 (1, 2) => s.cc(Rgbw::CYAN, Rgbw::MINT),
                 (1, 3) => s.cc(Rgbw::LIME, Rgbw::LIME),
 
@@ -150,7 +163,7 @@ fn on_pad(
                 (2, 1) => s.cc(Rgbw::RED, Rgbw::BLUE),
                 (2, 2) => s.cc(Rgbw::RED, Rgbw::MAGENTA),
                 (2, 3) => s.cc(Rgbw::MAGENTA, Rgbw::RED),
-                (2, 4) => s.c(Rgbw::VIOLET),
+                (2, 4) => s.cc(Rgbw::VIOLET, Rgbw::MAGENTA),
 
                 // env0 beat
                 (6, 0) => s.beat0 = Beat::at(s, Pd(2, 1), 0.0..1.0),
@@ -161,10 +174,24 @@ fn on_pad(
                 (7, 1) => s.beat1 = Beat::at(s, Pd(1, 1), 0.0..1.0),
                 _ => {},
             }
+
+            // post ops
+            match (x, y) {
+                // reset when pressing paterns or holds
+                (3..=4, ..) | (6, 3..) | (7, 3..) => {
+                    s.beat0 = Beat::Off;
+                    s.beat1 = Beat::Off;
+                },
+                _ => {},
+            }
         }
 
         // holds
         match (x, y) {
+            // hold pressure env
+            (6, 2) => s.beat0 = Beat::Fr(fr.in_exp()),
+            (7, 2) => s.beat0 = Beat::Fr(fr.in_exp()),
+
             // hold mod colors
             (5, 1) => {
                 s.c_h.hold(x, y, b, Op::f(|s| Rgbw::hsv(s.pd(Pd(4, 1)), 1.0, 1.0)));
@@ -179,6 +206,26 @@ fn on_pad(
             // hold strobe w/ pressure
             (6, 3) => s.env_h.hold(x, y, b, Op::f(move |s| s.pd(Pd(1, 4)).square(1.0, fr.in_exp().lerp(1.0..0.5)))),
             (7, 3) => s.env_h.hold(x, y, b, Op::f(move |s| s.pd(Pd(1, 8)).square(1.0, fr.in_exp().lerp(1.0..0.5)))),
+
+            // hold white strobe
+            (6, 4) => {
+                s.env_h0.hold(x, y, b, Op::f(move |s| s.pd(Pd(1, 4)).square(1.0, fr.in_exp().lerp(1.0..0.5))));
+                s.env_h1.hold(x, y, b, Op::v(0.0));
+                s.c_h.hold(x, y, b, Op::v(Rgbw::WHITE));
+            },
+            (7, 4) => {
+                s.env_h.hold(x, y, b, Op::f(move |s| s.pd(Pd(1, 8)).square(1.0, fr.in_exp().lerp(1.0..0.5))));
+                s.c_h.hold(x, y, b, Op::v(Rgbw::WHITE));
+            },
+
+            // hold chase
+            (6, 5) => {
+                s.par_src_h.hold(x, y, b, Source::Chase { pd: Pd(1, 1), duty: 0.1 });
+                s.env_h1.hold(x, y, b, Op::v(0.0));
+                s.c_h.hold(x, y, b, Op::v(Rgbw::WHITE));
+                s.strobe_src_h.hold(x, y, b, Source::Strobe { pd: Pd(1, 4), duty: fr.in_exp().lerp(1.0..0.5) });
+            }
+
             _ => {},
         }
     }
@@ -190,7 +237,6 @@ fn on_ctrl(
     event: launch_control_xl::Input,
     s: &mut State,
     l: &mut Lights,
-    pad: &mut Midi<LaunchpadX>,
     ctrl: &mut Midi<LaunchControlXL>,
 ) {
     use launch_control_xl::{types::*, *};
@@ -233,12 +279,23 @@ fn on_ctrl(
 
 ///////////////////////// IO /////////////////////////
 
-fn io(ctx: &egui::Context, dt: f64, s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, ctrl: &mut Midi<LaunchControlXL>, e131: &mut E131) {
-    for event in pad.recv() {
-        on_pad(event, s, l, pad, ctrl);
+fn io(
+    ctx: &egui::Context,
+    dt: f64, s: &mut State,
+    l: &mut Lights,
+    pad: &mut Option<Midi<LaunchpadX>>,
+    ctrl: &mut Option<Midi<LaunchControlXL>>,
+    e131: &mut E131
+) {
+    if let Some(pad) = pad.as_mut() {
+        for event in pad.recv() {
+            on_pad(event, s, l, pad);
+        }
     }
-    for event in ctrl.recv() {
-        on_ctrl(event, s, l, pad, ctrl);
+    if let Some(ctrl) = ctrl.as_mut() {
+        for event in ctrl.recv() {
+            on_ctrl(event, s, l, ctrl);
+        }
     }
 
     // real time
@@ -251,7 +308,7 @@ fn io(ctx: &egui::Context, dt: f64, s: &mut State, l: &mut Lights, pad: &mut Mid
     s.phi = (s.phi + (s.dt * (s.bpm / 60.0))).fmod(16.0);
 
     // tick alpha up/down
-    s.alpha = if s.alpha_up { (s.alpha + s.dt(1, 1)).min(1.0) } else { s.alpha };
+    s.alpha = if s.alpha_up { (s.alpha + s.dt(1, 1)) } else { s.alpha };
     s.alpha = if s.alpha_down { (s.alpha - s.dt(1, 1)).max(0.0) } else { s.alpha };
 
     // apply hold fallbacks
@@ -266,15 +323,15 @@ fn io(ctx: &egui::Context, dt: f64, s: &mut State, l: &mut Lights, pad: &mut Mid
     // envelope alpha
     let env0 = env0(s);
     let env1 = env1(s);
-    let a0 = a * s.beat0.or(s, env0);
-    let a1 = a * s.beat1.or(s, env1);
+    let a0 = (a * s.beat0.or(s, env0)).min(1.0);
+    let a1 = (a * s.beat1.or(s, env1)).min(1.0);
 
     // alpha adjust colors
     let c0 = c0(s).a(a0);
     let c1 = c1(s).a(a1);
 
     // pad stuff
-    {
+    if let Some(pad) = pad.as_mut() {
         use launchpad_x::{types::*, *};
 
         // main grid c0
@@ -301,14 +358,16 @@ fn io(ctx: &egui::Context, dt: f64, s: &mut State, l: &mut Lights, pad: &mut Mid
         ))
     }
 
+    // lights
+    l.par_src = s.par_src_h.or(&s.par_src);
+    l.strobe_src = s.strobe_src_h.or(&s.strobe_src);
     l.tick(s, c0, c1);
-    l.send(e131);
+    // l.send(e131);
 
     egui::CentralPanel::default().show(ctx, |ui| {
-        let (resp, p) = ui.allocate_painter(ui.available_size(), egui::Sense::hover());
-
-        // add colored rect shape based on c0
-        p.add(egui::Shape::circle_filled(egui::Pos2::new(100.0, 100.0), 100.0, c0.e()));
+        let size = ui.available_size();
+        let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+        l.paint(&painter, size.x as f64, size.y as f64);
     });
 }
 
@@ -324,11 +383,18 @@ impl State {
     fn cc(&mut self, c0: Rgbw, c1: Rgbw) { self.c0 = Op::v(c0); self.c1 = Op::v(c1); }
     fn ccc(&mut self, f: impl Fn(&mut State) -> Rgbw + 'static) { self.c0 = Op::f(f); self.c1 = self.c0.clone(); }
 
-    fn env(&mut self, f: impl Fn(&mut State) -> f64 + 'static) {
+    fn env0(&mut self, f: impl Fn(&mut State) -> f64 + 'static) {
         self.beat0 = Beat::Off;
         self.beat1 = Beat::Off;
-
         self.env0 = f.into();
+    }
+    fn env1(&mut self, f: impl Fn(&mut State) -> f64 + 'static) {
+        self.beat0 = Beat::Off;
+        self.beat1 = Beat::Off;
+        self.env1 = f.into();
+    }
+    fn env(&mut self, f: impl Fn(&mut State) -> f64 + 'static) {
+        self.env0(f);
         self.env1 = self.env0.clone();
     }
 }
@@ -341,8 +407,8 @@ fn main() -> Result<()> {
 
     let mut e131 = E131::new("10.16.4.1".parse()?, E131_PORT, 1)?;
 
-    let mut pad = Midi::connect("Launchpad X:Launchpad X LPX MIDI", LaunchpadX::default())?;
-    let mut ctrl = Midi::connect("Launch Control XL:Launch Control XL", LaunchControlXL)?;
+    let mut pad = Midi::connect("Launchpad X:Launchpad X LPX MIDI", LaunchpadX::default()).ok();
+    let mut ctrl = Midi::connect("Launch Control XL:Launch Control XL", LaunchControlXL).ok();
 
     let mut s = State::default();
     let mut l = Lights::default();
@@ -352,10 +418,21 @@ fn main() -> Result<()> {
     s.alpha = 1.0;
     s.t_mod = 1.0;
     s.phi_mod = 1.0;
-    s.c0 = Op::v(Rgbw::WHITE);
-    s.c1 = Op::v(Rgbw::VIOLET);
+    s.ccc(|s| Rgbw::hsv(s.phi(16, 1), 1.0, 1.0));
+    s.c(Rgbw::WHITE);
+    // s.c0 = Op::v(Rgbw::VIOLET);
+    // s.c1 = Op::v(Rgbw::WHITE);
     s.env0 = Op::v(1.0);
     s.env1 = Op::v(1.0);
+
+    s.strobe_src = Source::C0;
+
+    // l.par_src = Source::Chase { pd: Pd(1, 1), duty: 0.2 };
+    l.spider_src = Source::SpiderBoth;
+    l.spider_pos = SpiderPos::Alternate { pd: Pd(4, 1) };
+    l.beam_src = Source::C1;
+    l.beam_pos = BeamPos::Square { pd: Pd(1, 1) };
+    l.bar_src = Source::C1;
 
     let mut last = Instant::now();
 

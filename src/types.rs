@@ -58,6 +58,7 @@ pub enum Beat {
     #[default]
     Off,
     On { t: f64, pd: Pd, r: Range },
+    Fr(f64),
 }
 
 impl Beat {
@@ -77,7 +78,8 @@ impl Beat {
                 } else {
                     (dt / len).ramp(1.0).inv().lerp(r)
                 }
-            }
+            },
+            Beat::Fr(fr) => fr,
         }
     }
 }
