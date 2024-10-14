@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+#stagebridge = { git = "https://github.com/foltik/stagebridge", branch = "main" }
+stagebridge = { path = "../stagebridge" }
+
 anyhow = "1"
+log = "0.4"
 env_logger = "0.10"
 rand = "0.8"
 itertools = "0.10"
-egui = { version = "0.23", default-features = false }
-eframe = { version = "0.23", default-features = false, features = ["x11"] }
+clap = { version = "4", features = ["derive"] }
 
-stagebridge = { git = "https://github.com/foltik/stagebridge", branch = "main" }
+egui = { version = "0.23", default-features = false }
+eframe = { version = "0.23", default-features = false, features = ["x11", "wgpu"] }

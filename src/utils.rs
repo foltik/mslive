@@ -1,8 +1,7 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
-use stagebridge::color::{Rgbw, Rgb};
-use stagebridge::num::{Float, Range};
+use stagebridge::prelude::*;
 
 use crate::State;
 
@@ -10,9 +9,15 @@ use crate::State;
 #[derive(Clone, Copy, Debug)]
 pub struct Pd(pub usize, pub usize);
 impl Pd {
-    pub fn fr(&self) -> f64 { self.0 as f64 / self.1 as f64 }
-    pub fn mul(&self, mul: usize) -> Self { Self(self.0 * mul, self.1) }
-    pub fn div(&self, div: usize) -> Self { Self(self.0, self.1 * div) }
+    pub fn fr(&self) -> f64 {
+        self.0 as f64 / self.1 as f64
+    }
+    pub fn mul(&self, mul: usize) -> Self {
+        Self(self.0 * mul, self.1)
+    }
+    pub fn div(&self, div: usize) -> Self {
+        Self(self.0, self.1 * div)
+    }
 }
 
 impl Default for Pd {
@@ -21,22 +26,30 @@ impl Default for Pd {
     }
 }
 
-/// Hold
+// TODO: explain
 #[derive(Clone, Copy, Debug, Default)]
-pub enum Hold<T> {
+pub enum Holdable<T> {
     #[default]
     Off,
-    Held { x: i8, y: i8, val: T }
+    Held {
+        x: i8,
+        y: i8,
+        val: T,
+    },
 }
 
-impl<T> Hold<T> {
+impl<T> Holdable<T> {
     pub fn hold(&mut self, x: i8, y: i8, b: bool, val: T) {
         match *self {
-            Hold::Off => *self = Self::Held { x, y, val },
-            Hold::Held { x: x0, y: y0, .. } => match b {
+            Holdable::Off => *self = Self::Held { x, y, val },
+            Holdable::Held { x: x0, y: y0, .. } => match b {
                 true => *self = Self::Held { x, y, val },
-                false => if x == x0 && y == y0 { *self = Self::Off },
-            }
+                false => {
+                    if x == x0 && y == y0 {
+                        *self = Self::Off
+                    }
+                }
+            },
         }
     }
 
@@ -46,8 +59,8 @@ impl<T> Hold<T> {
         T: Clone,
     {
         match self {
-            Hold::Off => fallback.clone(),
-            Hold::Held { val, .. } => val.clone(),
+            Holdable::Off => fallback.clone(),
+            Holdable::Held { val, .. } => val.clone(),
         }
     }
 }
@@ -57,7 +70,11 @@ impl<T> Hold<T> {
 pub enum Beat {
     #[default]
     Off,
-    On { t: f64, pd: Pd, r: Range },
+    On {
+        t: f64,
+        pd: Pd,
+        r: Range,
+    },
     Fr(f64),
 }
 
@@ -78,7 +95,7 @@ impl Beat {
                 } else {
                     (dt / len).ramp(1.0).inv().lerp(r)
                 }
-            },
+            }
             Beat::Fr(fr) => fr,
         }
     }
