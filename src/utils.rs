@@ -26,41 +26,46 @@ impl Default for Pd {
     }
 }
 
-// TODO: explain
+/// A helper to keep track of a momentary "hold" of a button.
+///
+/// Like a fancy `Option<T>` that remembers who set it to `Some`.
 #[derive(Clone, Copy, Debug, Default)]
-pub enum Holdable<T> {
+pub enum Hold<T> {
     #[default]
     Off,
     Held {
+        /// X coordinate of the button which initiated the hold
         x: i8,
+        /// Y coordinate of the button which initiated the hold
         y: i8,
+        /// Value being held
         val: T,
     },
 }
 
-impl<T> Holdable<T> {
-    pub fn hold(&mut self, x: i8, y: i8, b: bool, val: T) {
-        match *self {
-            Holdable::Off => *self = Self::Held { x, y, val },
-            Holdable::Held { x: x0, y: y0, .. } => match b {
-                true => *self = Self::Held { x, y, val },
-                false => {
-                    if x == x0 && y == y0 {
-                        *self = Self::Off
-                    }
+impl<T> Hold<T> {
+    /// Trigger a hold. `hold(true, T)` starts the hold, `hold(false, T)` ends it.
+    pub fn hold(&mut self, x: i8, y: i8, pressed: bool, val: T) {
+        let released = !pressed;
+
+        if pressed {
+            // When a button is pressed, update the hold state
+            *self = Self::Held { x, y, val };
+        } else if released {
+            // When a button is released, only reset hold state if it was set at the same coords
+            if let Hold::Held { x: x0, y: y0, .. } = self {
+                if x0 == y0 {
+                    *self = Self::Off;
                 }
-            },
+            }
         }
     }
 
-    // clone to avoid double borrowing state
-    pub fn or(&self, fallback: &T) -> T
-    where
-        T: Clone,
-    {
+    /// Return the current value being held.
+    pub fn value(&self) -> Option<&T> {
         match self {
-            Holdable::Off => fallback.clone(),
-            Holdable::Held { val, .. } => val.clone(),
+            Hold::Off => None,
+            Hold::Held { x, y, val } => Some(&val),
         }
     }
 }

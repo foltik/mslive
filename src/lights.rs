@@ -25,15 +25,6 @@ pub struct Lights {
     pub spiders: [Spider; 2],
     pub strobe: Strobe,
     pub laser: Laser,
-    // pub par_src: Source,
-    // pub beam_src: Source,
-    // pub beam_pos: BeamPos,
-    // pub beam_ring: BeamRing,
-    // pub strobe_src: Source,
-    // pub bar_src: Source,
-    // pub spider_src: Source,
-    // pub spider_pos: SpiderPos,
-    // pub laser_pos: LaserPos,
 }
 
 impl Lights {
@@ -81,82 +72,59 @@ impl Lights {
     }
 }
 
-// #[derive(Clone, Default)]
-// pub enum Source {
-//     Off,
-//     #[default]
-//     C0,
-//     C1,
-//     Alternate,
-//     Strobe {
-//         pd: Pd,
-//         duty: f64,
-//     },
-//     Chase {
-//         pd: Pd,
-//         duty: f64,
-//     },
-
-//     SpiderBoth,
-
-//     ParUpDown,
-//     ParSpotlight,
-//     // Fade,
-//     // Alternate { pd: Pd },
-// }
-
-#[derive(Clone, Default)]
-pub enum BeamPos {
-    #[default]
-    Down,
-    Out,
-    SpreadOut,
-    SpreadIn,
-    Cross,
-    CrissCross,
-    WaveY {
-        pd: Pd,
-    },
-    SnapX {
-        pd: Pd,
-    },
-    SnapY {
-        pd: Pd,
-    },
-    Square {
-        pd: Pd,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub enum SpiderPos {
-    Up,
-    #[default]
-    Down,
-    Wave {
-        pd: Pd,
-    },
-    Alternate {
-        pd: Pd,
-    },
-    Snap {
-        pd: Pd,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub enum LaserPos {
-    #[default]
-    Still,
-    Rotate {
-        pd: Pd,
-    },
-    WaveY {
-        pd: Pd,
-    },
-}
-
 impl Lights {
+    /// Apply a function to the color of each light
+    pub fn map_colors(&mut self, mut f: impl FnMut(Rgbw) -> Rgbw) {
+        self.for_each_par(|par, i, fr| par.color = f(par.color));
+        self.for_each_beam(|beam, i, fr| beam.color = f(beam.color));
+        self.for_each_spider(|spider, i, fr| {
+            spider.color0 = f(spider.color0);
+            spider.color1 = f(spider.color1);
+        });
+        self.for_each_bar(|bar, i, fr| bar.color = f(bar.color.into()).into());
+        self.strobe.color = f(self.strobe.color.into()).into();
+    }
+
+    // Iterate through the lights, with additional index and fr (from 0 to 1) parameters.
+    pub fn for_each_par(&mut self, f: impl FnMut(&mut Par, usize, f64)) {
+        Self::for_each(&mut self.pars, f);
+    }
+    pub fn for_each_beam(&mut self, f: impl FnMut(&mut Beam, usize, f64)) {
+        Self::for_each(&mut self.beams, f);
+    }
+    pub fn for_each_bar(&mut self, f: impl FnMut(&mut Bar, usize, f64)) {
+        Self::for_each(&mut self.bars, f);
+    }
+    pub fn for_each_spider(&mut self, f: impl FnMut(&mut Spider, usize, f64)) {
+        Self::for_each(&mut self.spiders, f);
+    }
+
+    fn for_each<T>(slice: &mut [T], mut f: impl FnMut(&mut T, usize, f64)) {
+        let n = slice.len();
+        slice.iter_mut().enumerate().for_each(|(i, t)| f(t, i, i as f64 / (n - 1) as f64));
+    }
+
+    //     self.pars.fmap(|i, fr, circ, p| {
+    //         p.color = match &self.par_src {
+    //             Source::ParUpDown => match i {
+    //                 0 => c1,
+    //                 1 => c0,
+    //                 2..=3 => c1,
+    //                 4..=5 => c0,
+    //                 6..=7 => c1,
+    //                 8 => c0,
+    //                 9 => c1,
+    //                 _ => unreachable!(),
+    //             },
+    //             Source::ParSpotlight => match i {
+    //                 3 => c1,
+    //                 6 => c1,
+    //                 _ => c0,
+    //             },
+    //             src => src.apply(s, c0, c1, i, fr, circ),
+    //         }
+    //     });
+
     // pub fn tick(&mut self, s: &mut State, c0: Rgbw, c1: Rgbw) {
     //     // colors
     //     self.bars.fmap(|i, fr, circ, b| b.color = self.bar_src.apply(s, c0, c1, i, fr, circ).into());
@@ -196,137 +164,6 @@ impl Lights {
     //             src => src.apply(s, c0, c1, i, fr, circ),
     //         }
     //     });
-
-    //     // laser pos
-    //     match self.laser_pos {
-    //         LaserPos::Rotate { pd } => self.laser.rotate = s.pd(pd),
-    //         LaserPos::WaveY { pd } => self.laser.y = s.pd(pd),
-    //         LaserPos::Still => {}
-    //     }
-
-    //     // spider pos
-    //     self.spiders.fmap(|i, fr, circ, sp| match self.spider_pos {
-    //         SpiderPos::Up => {
-    //             sp.pos0 = 0.0;
-    //             sp.pos1 = 0.52;
-    //         }
-    //         SpiderPos::Down => {
-    //             sp.pos0 = 0.67;
-    //             sp.pos1 = 0.52;
-    //         }
-    //         SpiderPos::Wave { pd } => {
-    //             let fr = s.pd(pd.mul(2)).tri(1.0);
-    //             sp.pos0 = fr;
-    //             sp.pos1 = 1.0 - fr;
-    //         }
-    //         SpiderPos::Alternate { pd } => {
-    //             let t = s.pd(pd.mul(2));
-    //             let t = match i {
-    //                 0 => t,
-    //                 1 => t.phase(1.0, 0.5),
-    //                 _ => unreachable!(),
-    //             };
-    //             let fr = t.tri(1.0);
-    //             sp.pos0 = fr;
-    //             sp.pos1 = fr;
-    //         }
-    //         SpiderPos::Snap { pd } => {
-    //             let t = s.pd(pd.mul(2));
-    //             let t = match i {
-    //                 0 => t,
-    //                 1 => t.phase(1.0, 0.5),
-    //                 _ => unreachable!(),
-    //             };
-    //             let fr = t.square(1.0, 0.5);
-    //             sp.pos0 = fr;
-    //             sp.pos1 = fr;
-    //         }
-    //     });
-
-    //     // global beam pos
-    //     match self.beam_pos {
-    //         BeamPos::SpreadOut => {
-    //             self.beams[0].yaw = 0.5 - 0.05;
-    //             self.beams[1].yaw = 0.5 - 0.02;
-    //             self.beams[2].yaw = 0.5 + 0.02;
-    //             self.beams[3].yaw = 0.5 + 0.05;
-    //         }
-    //         BeamPos::SpreadIn => {
-    //             self.beams[0].yaw = 0.5 + 0.09;
-    //             self.beams[1].yaw = 0.5 + 0.07;
-    //             self.beams[2].yaw = 0.5 - 0.07;
-    //             self.beams[3].yaw = 0.5 - 0.09;
-    //         }
-    //         BeamPos::Cross => {
-    //             self.beams[0].yaw = 0.5 + 0.13;
-    //             self.beams[1].yaw = 0.5 + 0.13;
-    //             self.beams[2].yaw = 0.5 - 0.13;
-    //             self.beams[3].yaw = 0.5 - 0.13;
-    //         }
-    //         BeamPos::CrissCross => {
-    //             self.beams[0].yaw = 0.5 + 0.08;
-    //             self.beams[1].yaw = 0.5 - 0.05;
-    //             self.beams[2].yaw = 0.5 + 0.05;
-    //             self.beams[3].yaw = 0.5 - 0.08;
-    //         }
-    //         _ => {}
-    //     };
-
-    //     // per-beam pos
-    //     self.beams.fmap(|i, fr, circ, b| match self.beam_pos {
-    //         BeamPos::Down => {
-    //             b.pitch = 0.0;
-    //             b.yaw = 0.5;
-    //         }
-    //         BeamPos::Out => {
-    //             b.pitch = 0.5;
-    //             b.yaw = 0.5;
-    //         }
-    //         BeamPos::SnapY { pd } => {
-    //             b.yaw = 0.5;
-    //             let t = s.pd(pd.mul(4)).square(1.0, 0.5);
-    //             b.pitch = 0.3
-    //                 * match i % 2 == 0 {
-    //                     true => t,
-    //                     false => 1.0 - t,
-    //                 }
-    //         }
-    //         BeamPos::SnapX { pd } => {
-    //             let t = s.pd(pd.mul(4)).negsquare(1.0, 0.5);
-    //             b.yaw = 0.5
-    //                 + 0.13
-    //                     * match i > 1 {
-    //                         true => t,
-    //                         false => -t,
-    //                     };
-    //             b.pitch = 0.3 * s.pd(pd.mul(2)).square(1.0, 0.5);
-    //         }
-    //         BeamPos::WaveY { pd } => {
-    //             b.yaw = 0.5;
-    //             let t = s.pd(pd.mul(2)).tri(1.0);
-    //             b.pitch = 0.3
-    //                 * match i % 2 == 0 {
-    //                     true => t,
-    //                     false => 1.0 - t,
-    //                 }
-    //         }
-    //         BeamPos::Square { pd } => {
-    //             let t_pitch = s.pd(pd.mul(4)).phase(1.0, 0.25).square(1.0, 0.5);
-    //             let t_yaw = match i % 2 == 0 {
-    //                 true => s.pd(pd.mul(4)).negsquare(1.0, 0.5),
-    //                 false => s.pd(pd.mul(4)).phase(1.0, 0.5).negsquare(1.0, 0.5),
-    //             };
-    //             b.pitch = 0.1
-    //                 + 0.25
-    //                     * match i % 2 == 0 {
-    //                         true => t_pitch,
-    //                         false => 1.0 - t_pitch,
-    //                     };
-    //             b.yaw = 0.5 + 0.08 * t_yaw;
-    //         }
-    //         _ => {}
-    //     });
-    // }
 }
 
 // impl Source {

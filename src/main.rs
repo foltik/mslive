@@ -23,11 +23,11 @@ use stagebridge::prelude::*;
 
 mod gui;
 mod lights;
-mod state;
+mod logic;
 mod utils;
 
 use lights::Lights;
-use state::State;
+use logic::State;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -54,7 +54,10 @@ fn main() -> Result<()> {
         .parse_default_env()
         .init();
 
+    Midi::<LaunchpadX>::list();
+
     // Initialize input devices
+    // let mut pad = Midi::new("WIDI Uhost", LaunchpadX::default());
     let mut pad = Midi::new("Launchpad X:Launchpad X LPX MIDI", LaunchpadX::default());
     let mut ctrl = Midi::new("Launch Control XL:Launch Control XL", LaunchControlXL);
     {
@@ -72,35 +75,32 @@ fn main() -> Result<()> {
     // Start the main loop, managed by the OS's windowing system.
     let mut last = Instant::now();
     eframe::run_simple_native("mslive", Default::default(), move |ctx, _frame| {
-        // Immediately request a repaint again from the OS to render at maximum speed.
-        ctx.request_repaint();
-
-        // Limit the framerate to 200fps
         let elapsed = last.elapsed();
-        if elapsed < Duration::from_millis(5) {
-            return;
-        }
         last = Instant::now();
 
-        // Main update logic
-        {
-            let s = &mut state;
-            let l = &mut lights;
+        let (s, l) = (&mut state, &mut lights);
 
+        // Update logic
+        {
             for input in ctrl.recv() {
-                state::on_ctrl(s, l, input);
+                logic::on_ctrl(s, l, &mut ctrl, input);
             }
             for input in pad.recv() {
-                state::on_pad(s, l, input);
+                logic::on_pad(s, l, &mut pad, input);
             }
 
-            state::tick(elapsed.as_secs_f64(), s, l);
+            logic::tick(elapsed.as_secs_f64(), s, l);
 
-            state::render_lights(s, l);
-            state::render_pad(s, &mut pad);
-            state::render_ctrl(s, &mut ctrl);
-            gui::render_gui(s, l, ctx);
+            logic::render_lights(s, l);
+            logic::render_pad(s, &mut pad);
+            logic::render_ctrl(s, &mut ctrl);
         }
+
+        // Always render the GUI each frame
+        gui::render_gui(s, l, ctx);
+
+        // Immediately request a repaint again from the OS to render at maximum speed.
+        ctx.request_repaint();
     });
 
     Ok(())
