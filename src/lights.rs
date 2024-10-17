@@ -73,6 +73,18 @@ impl Lights {
 }
 
 impl Lights {
+    /// Pars and bars one color, spiders and bars another
+    pub fn split(&mut self, col0: Rgbw, col1: Rgbw) {
+        self.for_each_par(|par, i, fr| par.color = col0);
+        self.for_each_beam(|beam, i, fr| beam.color = col1);
+        self.for_each_spider(|spider, i, fr| {
+            spider.color0 = col1;
+            spider.color1 = col0;
+        });
+        self.for_each_bar(|bar, i, fr| bar.color = col1.into());
+        self.strobe.color = col0.into();
+    }
+
     /// Apply a function to the color of each light
     pub fn map_colors(&mut self, mut f: impl FnMut(Rgbw) -> Rgbw) {
         self.for_each_par(|par, i, fr| par.color = f(par.color));
@@ -101,7 +113,7 @@ impl Lights {
 
     fn for_each<T>(slice: &mut [T], mut f: impl FnMut(&mut T, usize, f64)) {
         let n = slice.len();
-        slice.iter_mut().enumerate().for_each(|(i, t)| f(t, i, i as f64 / (n - 1) as f64));
+        slice.iter_mut().enumerate().for_each(|(i, t)| f(t, i, i as f64 / n as f64));
     }
 
     //     self.pars.fmap(|i, fr, circ, p| {
