@@ -19,6 +19,11 @@ use stagebridge::prelude::*;
 use crate::lights::Lights;
 use crate::utils::{Hold, Pd};
 
+use std::io;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::TryRecvError;
+
 ///////////////////////// TODO /////////////////////////
 
 // * Beat buttons
@@ -70,6 +75,8 @@ pub struct State {
     pub test2: f64,
     pub test3: f64,
     pub test4: f64,
+
+    pub follow_stdin: bool,
 }
 
 impl State {
@@ -96,7 +103,7 @@ impl State {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub enum Mode {
     /// All off
     Off,
@@ -164,6 +171,7 @@ pub enum Mode {
     Twisting {
         pd: Pd,
     },
+    Stdin,
 }
 
 ///////////////////////// COLOR PALETTE /////////////////////////
@@ -377,7 +385,7 @@ impl BeamPattern {
                 (pitch, yaw)
             }
             BeamPattern::WaveY => {
-                let t = s.pd(pd.mul(2)).tri(1.0);
+                let t = s.pd(pd.mul(4)).tri(1.0);
                 let pitch = 0.4
                     * match i % 2 == 0 {
                         _ => t,
@@ -948,7 +956,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                 // let y0 = (.floor() as i8;
                 for x in 0..8 {
                     for y in 0..8 {
-                        let fr = y as f64 / 7.0;
+                        let fr = y as f64 / 8.0;
                         let env = s.phi(4, 1).tri(1.0).phase(1.0, fr).out_exp();
                         set(x, y, Rgb::from(s.palette.color0(s, 0.0)) * (1.0 - env));
                         // if y == y0 {
@@ -1086,6 +1094,7 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         // half/double-time
         Input::Up(true) => s.phi_mul = 2.0,
         Input::Down(true) => s.phi_mul = 0.5,
+        Input::Left(true) => s.follow_stdin = true,
         _ => {}
     }
 
@@ -1112,6 +1121,8 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         log::info!("Pad({x}, {y})");
 
         s.phi_mul = 1.0;
+
+        s.follow_stdin = false;
 
         match (x, y) {
             // Beatmatch
@@ -1364,5 +1375,51 @@ pub fn on_ctrl(s: &mut State, l: &mut Lights, ctrl: &mut Midi<LaunchControlXL>, 
         Input::Slider(3, fr) => l.laser.xflip = fr,
         Input::Slider(4, fr) => l.laser.yflip = fr,
         _ => {}
+    }
+}
+
+///////////////////////// FOLLOW STDIN /////////////////////////
+
+// #[derive(rsexp_derive::OfSexp)]
+struct StdinCommand {
+    bpm: f64,
+    mode: Mode,
+}
+
+pub fn follow_stdin(s: &mut State, stdin: &mut Receiver<String>) {
+    match stdin.try_recv() {
+        Ok(input) => {
+            print!("{input}");
+            if input.starts_with("$ ") {
+                let input = input.strip_prefix("$ ").unwrap().trim();
+                let cmd = input.split(' ').nth(0).unwrap();
+                match cmd {
+                    "TEMPO" => {
+                        let bpm = input.split(' ').nth(1).unwrap().parse().unwrap();
+                        println!("$ Setting BPM to {bpm:.2}");
+                        s.bpm = bpm;
+                    }
+                    "RANDOM" => {
+                        let mut rng = rand::thread_rng();
+                        let possible_modes = vec![
+                            Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
+                            Mode::Strobe0 { pd: Pd(1, 8), duty: 1.0 },
+                            Mode::Break { beams: Some(BeamPattern::UpDownWave) },
+                            Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
+                            Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
+                            Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
+                            Mode::RaisingBeams { pd: Pd(4, 1) },
+                            Mode::Whirl { pd: Pd(16, 1) },
+                        ];
+                        s.mode = possible_modes.choose(&mut rng).unwrap().clone();
+                    }
+                    "CHASE" => {
+                        s.mode = Mode::Chase { pd: Pd(1, 4), beam: BeamPattern::Twisting };
+                    }
+                    _ => println!("Unrecognized stdin input: {input:?}"),
+                }
+            }
+        }
+        Err(err) => (),
     }
 }

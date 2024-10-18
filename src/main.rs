@@ -21,6 +21,11 @@ use stagebridge::midi::device::{
 use stagebridge::midi::Midi;
 use stagebridge::prelude::*;
 
+use std::io;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::TryRecvError;
+
 mod gui;
 mod lights;
 mod logic;
@@ -72,6 +77,8 @@ fn main() -> Result<()> {
     // Initialize main state
     let mut state = State::new();
 
+    let mut stdin_channel = spawn_stdin_channel();
+
     // Start the main loop, managed by the OS's windowing system.
     let mut last = Instant::now();
     eframe::run_simple_native("mslive", Default::default(), move |ctx, _frame| {
@@ -90,6 +97,9 @@ fn main() -> Result<()> {
             }
 
             logic::tick(elapsed.as_secs_f64(), s, l);
+            if s.follow_stdin {
+                logic::follow_stdin(s, &mut stdin_channel);
+            }
 
             logic::render_lights(s, l);
             logic::render_pad(s, &mut pad);
@@ -104,4 +114,15 @@ fn main() -> Result<()> {
     });
 
     Ok(())
+}
+fn spawn_stdin_channel() -> Receiver<String> {
+    let (tx, rx) = mpsc::channel::<String>();
+    thread::spawn(move || loop {
+        println!("THREAD");
+        let mut buffer = String::new();
+        io::stdin().read_line(&mut buffer).unwrap();
+        print!("GOT {buffer}");
+        tx.send(buffer).unwrap();
+    });
+    rx
 }
