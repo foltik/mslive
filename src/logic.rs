@@ -19,6 +19,20 @@ use stagebridge::prelude::*;
 use crate::lights::Lights;
 use crate::utils::{Hold, Pd};
 
+///////////////////////// TODO /////////////////////////
+
+// * Beat buttons
+// * Strobe variations
+// * Autobeat variations
+// * Hold variations
+//    * strobing beams-only, sweeping upwards
+// * Better colors
+// * Brightness adjustments
+
+///////////////////////// IDEAS /////////////////////////
+
+// * Random beam strobe
+
 ///////////////////////// STATE /////////////////////////
 
 #[derive(Default)]
@@ -34,6 +48,8 @@ pub struct State {
     pub bpm_taps: Vec<f64>,
     /// Current fractional beat number in a 16 beat measure at the current `bpm`. Ranges from `0..16` and wraps around
     pub phi: f64,
+    /// Bpm multiplier, e.g. 0.5 for half-time, 2.0 for double-time.
+    pub phi_mul: f64,
 
     /// Color palette
     pub palette: Palette,
@@ -51,6 +67,9 @@ pub struct State {
     // Test paramters
     pub test0: f64,
     pub test1: f64,
+    pub test2: f64,
+    pub test3: f64,
+    pub test4: f64,
 }
 
 impl State {
@@ -60,6 +79,7 @@ impl State {
             brightness: 0.25,
             palette: Palette::Rainbow,
             bpm: 120.0,
+            phi_mul: 1.0,
             ..Default::default()
         }
     }
@@ -95,10 +115,16 @@ pub enum Mode {
     },
     /// Single flash to a manual beat.
     ManualBeat {
-        /// Time of press
-        t: f64,
-        /// Duration of beat.
-        pd: Pd,
+        /// Time of left press
+        t0: f64,
+        /// Time of right press
+        t1: f64,
+
+        /// Duration of left beat.
+        pd0: Pd,
+        /// Duration of right beat.
+        pd1: Pd,
+
         /// Brightness range of flash.
         r: Range,
     },
@@ -118,6 +144,10 @@ pub enum Mode {
     },
     Chase {
         pd: Pd,
+        beam: BeamPattern,
+    },
+    ChaseNotColorful {
+        pd: Pd,
     },
     // Twinkle {
     //     pd: Pd,
@@ -126,6 +156,12 @@ pub enum Mode {
         pd: Pd,
     },
     RaisingBeams {
+        pd: Pd,
+    },
+    Break {
+        beams: Option<BeamPattern>,
+    },
+    Twisting {
         pd: Pd,
     },
 }
@@ -137,6 +173,7 @@ pub enum Palette {
     /// Gradually cycling rainbow
     #[default]
     Rainbow,
+    Oscillate,
     /// Solid color
     Solid(Rgbw),
     Split(Rgbw, Rgbw),
@@ -146,6 +183,11 @@ impl Palette {
     fn color0(self, s: &mut State, fr: f64) -> Rgbw {
         match self {
             Palette::Rainbow => Rgb::hsv(s.phi(16, 1), 1.0, 1.0).into(),
+            Palette::Oscillate => match s.pd(Pd(1, 2)).ramp(1.0) {
+                ..0.33 => Rgbw::RED,
+                0.33..0.66 => Rgbw::LIME,
+                _ => Rgbw::BLUE,
+            },
             Palette::Solid(col) => col,
             Palette::Split(col0, _col1) => col0,
         }
@@ -231,16 +273,26 @@ impl WhirlState {
 pub enum BeamPattern {
     Down,
     Out,
+    Center,
     SpreadOut,
     SpreadIn,
-    Cross,
-    CrissCross,
+    Cross {
+        pitch: f64,
+        angle: Option<f64>,
+        fanning: Option<f64>,
+    },
+    CrissCross {
+        pitch: f64,
+    },
     WaveY,
     SnapX,
     SnapY,
     Square,
     Whirl,
     RaisingBeams,
+    Twisting,
+    DarthMaul,
+    UpDownWave,
 }
 
 impl BeamPattern {
@@ -253,6 +305,17 @@ impl BeamPattern {
     /// Calculate (pitch, yaw) for the given pattern
     fn angles(self, s: &mut State, pd: Pd, i: usize, fr: f64) -> (f64, f64) {
         match self {
+            BeamPattern::Down => (0.0, 0.0),
+            BeamPattern::Out => (0.5, 0.33),
+            BeamPattern::Center => (
+                0.85,
+                match i {
+                    0 => 0.05,
+                    1 => 0.7,
+                    2 => 0.63,
+                    _ => 0.6,
+                },
+            ),
             BeamPattern::SpreadOut => (
                 0.0,
                 match i {
@@ -271,17 +334,21 @@ impl BeamPattern {
                     _ => 0.5 - 0.09,
                 } - (0.25 / 1.5),
             ),
-            BeamPattern::Cross => (
-                0.0,
-                match i {
-                    0 => 0.5 + 0.13,
-                    1 => 0.5 + 0.13,
-                    2 => 0.5 - 0.13,
-                    _ => 0.5 - 0.13,
-                } - (0.25 / 1.5),
-            ),
-            BeamPattern::CrissCross => (
-                0.0,
+            BeamPattern::Cross { pitch, angle, fanning } => {
+                let a = angle.unwrap_or(0.13);
+                let f = if i == 1 || i == 2 { fanning.unwrap_or(1.0) } else { 1. };
+                (
+                    pitch * f,
+                    match i {
+                        0 => 0.5 + a,
+                        1 => 0.5 + a,
+                        2 => 0.5 - a,
+                        _ => 0.5 - a,
+                    } - (0.25 / 1.5),
+                )
+            }
+            BeamPattern::CrissCross { pitch } => (
+                pitch,
                 match i {
                     0 => 0.5 + 0.08,
                     1 => 0.5 - 0.05,
@@ -289,8 +356,6 @@ impl BeamPattern {
                     _ => 0.5 - 0.08,
                 } - (0.25 / 1.5),
             ),
-            BeamPattern::Down => (0.0, 0.5),
-            BeamPattern::Out => (0.5, 0.5),
             BeamPattern::SnapY => {
                 let t = s.pd(pd.mul(4)).square(1.0, 0.5);
                 let pitch = 0.3
@@ -313,12 +378,13 @@ impl BeamPattern {
             }
             BeamPattern::WaveY => {
                 let t = s.pd(pd.mul(2)).tri(1.0);
-                let pitch = 0.3
+                let pitch = 0.4
                     * match i % 2 == 0 {
-                        true => t,
-                        false => 1.0 - t,
+                        _ => t,
+                        // true => t,
+                        // false => 1.0 - t,
                     };
-                (pitch, 0.5)
+                (pitch, 1.0)
             }
             BeamPattern::Square => {
                 let t_pitch = s.pd(pd.mul(4)).phase(1.0, 0.25).square(1.0, 0.5);
@@ -345,9 +411,10 @@ impl BeamPattern {
             }
             BeamPattern::RaisingBeams => {
                 let angle = (s.pd(pd) + fr * 2.0) % 1.0;
-                let pitch = if angle < 0.5 {
-                    (0.5 - angle)
-                } else if angle < 0.75 {
+                // let
+                let pitch = if angle < 0.7 {
+                    (0.5 - angle / 0.7 * 0.5)
+                } else if angle < 0.9 {
                     (0.6)
                 } else {
                     (0.5 - (angle - 0.9))
@@ -355,6 +422,30 @@ impl BeamPattern {
 
                 (pitch * 0.9, 0.0)
             }
+            BeamPattern::Twisting => {
+                // angle
+                // rand::thread_rng().s
+                // rand::Rng::Ch.from_seed(10);
+                // (0.5)
+                use rand::prelude::*;
+                let seed = (s.pd(pd.mul(512)) * 255.) as u8;
+                let mut seed_array = [seed; 32];
+                seed_array[0] = i as u8;
+                let mut rng = rand::prelude::StdRng::from_seed(seed_array);
+                let yaw = rng.sample(rand::distributions::Uniform::new(0.0, 1.0));
+                let pitch = rng.sample(rand::distributions::Uniform::new(0.2, 0.8));
+                (pitch, yaw)
+                // (0.0, s.tri(pd))
+            }
+            BeamPattern::DarthMaul => (
+                0.2,
+                match i {
+                    _ if i % 2 == 0 => s.pd(pd.mul(8)).tri(1.0).lerp(0.2..0.8),
+                    _ if i % 2 == 1 => s.pd(pd.mul(8)).tri(1.0).lerp(0.2..0.8) + 0.66,
+                    _ => 0.0,
+                },
+            ),
+            BeamPattern::UpDownWave => (0.2, s.pd(Pd(8, 1)).phase(1.0, fr * 0.1).square(1.0, 0.5)),
         }
     }
 }
@@ -407,8 +498,6 @@ impl SpiderPattern {
         }
     }
 }
-
-///////////////////////// LASER PATTERNS /////////////////////////
 
 ///////////////////////// LASER PATTERNS /////////////////////////
 
@@ -512,6 +601,28 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
 
             // l.for_each_beam(|beam, i, fr| BeamPattern::Square { pd }.apply(s, beam, i, fr));
             // l.for_each_spider(|spider, i, fr| SpiderPattern::Alternate { pd }.apply(s, spider, i, fr));
+
+            l.for_each_beam(|beam, i, fr| BeamPattern::Square.apply(s, Pd(2, 1), beam, i, fr));
+            l.for_each_spider(|spider, i, fr| SpiderPattern::Alternate { pd: Pd(2, 1) }.apply(s, spider, i, fr));
+            l.strobe.color = Rgb::from(s.palette.color0(s, 0.0) * env);
+        }
+        Mode::Strobe0 { pd, duty } => {
+            let p = s.palette;
+            let env = s.pd(pd).square(1.0, duty.in_exp().lerp(1.0..0.5));
+            l.split(s.palette.color0(s, 0.0) * env, Rgbw::BLACK);
+
+            l.for_each_beam(|beam, i, fr| BeamPattern::Square.apply(s, Pd(2, 1), beam, i, fr));
+            l.for_each_spider(|spider, i, fr| SpiderPattern::Alternate { pd: Pd(2, 1) }.apply(s, spider, i, fr));
+            l.strobe.color = Rgb::from(s.palette.color0(s, 0.0) * env);
+        }
+        Mode::Strobe1 { pd, duty } => {
+            let p = s.palette;
+            let env = s.pd(pd).square(1.0, duty.in_exp().lerp(1.0..0.5));
+            l.split(Rgbw::BLACK, s.palette.color0(s, 0.0) * env);
+
+            l.for_each_beam(|beam, i, fr| BeamPattern::Square.apply(s, Pd(2, 1), beam, i, fr));
+            l.for_each_spider(|spider, i, fr| SpiderPattern::Alternate { pd: Pd(2, 1) }.apply(s, spider, i, fr));
+            l.strobe.color = Rgb::from(s.palette.color0(s, 0.0) * env);
         }
         Mode::Whirl { pd } => {
             // let p = s.palette;
@@ -535,11 +646,30 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
                 beam.color = col * env0;
             });
         }
-        Mode::Chase { pd } => {
+        Mode::Chase { pd, beam: beam_pattern } => {
             l.for_each_par(|par, i, fr| par.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1));
             l.for_each_beam(|beam, i, fr| {
                 beam.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1);
-                BeamPattern::CrissCross.apply(s, pd, beam, i, fr);
+                beam_pattern.apply(s, Pd(1, 2), beam, i, fr);
+            });
+        }
+        Mode::ChaseNotColorful { pd } => {
+            let col0 = s.palette.color0(s, 0.0);
+            let col1 = s.palette.color1(s, 0.0);
+            // l.for_each_par(|par, i, fr| {
+            //     par.color = Rgbw::WHITE * s.phi.fmod_div(pd.mul(4).fr() + fr * 4.3).phase(1.0, fr).square(1.0, 0.3);
+            // });
+            l.for_each_beam(|beam, i, fr| {
+                let offset = if i < 2 { 0.0 } else { 0.5 };
+                beam.color = col0 * s.pd(pd).phase(1.0, offset).square(1.0, 0.33);
+                // let base = if i % 2 == 0 { col0 } else { col1 };
+                // beam.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 1.0 / (10. + fr * 20.));
+                BeamPattern::Cross {
+                    pitch: (1. - s.pd(pd.mul(8)).fsin(1.)) * 0.3 + 0.1,
+                    angle: Some(s.pd(pd.mul(8)).fsin(1.) * 0.2 - 0.1),
+                    fanning: Some(1.5),
+                }
+                .apply(s, pd, beam, i, fr);
             });
             //
         }
@@ -548,12 +678,56 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
             let col = s.palette.color0(s, 0.0);
             l.for_each_beam(|beam, i, fr| {
                 BeamPattern::RaisingBeams.apply(s, pd, beam, i, fr);
-
                 let angle = (s.pd(pd) + fr * 2.0) % 1.0;
-                let env = if angle < 0.5 { (angle / 0.5).fsin(1.0).powf(0.1) } else { 0.0 };
+                // // let
+                // let pitch = if angle < 0.5 {
+                //     (0.5 - angle)
+                // } else if angle < 0.75 {
+                //     (0.6)
+                // } else {
+                //     (0.5 - (angle - 0.9))
+                // };
+                let env = if angle < 0.45 { (angle - 0.1).trapazoid(0.5, 0.1) } else { 0.0 };
 
                 beam.color = col * env;
             });
+        }
+        Mode::Break { beams } => {
+            if let Some(beams) = beams {
+                let col = s.palette.color0(s, 0.0);
+                l.for_each_beam(|beam, i, fr| {
+                    beams.apply(s, Pd(4, 1), beam, i, fr);
+                    beam.color = col;
+                });
+            }
+        }
+        Mode::ManualBeat { t0, t1, pd0, pd1, r } => {
+            let fr0 = {
+                let dt = s.t - t0;
+                let len = (60.0 / s.bpm) * pd0.fr();
+
+                if dt >= len {
+                    r.hi
+                } else {
+                    (dt / len).ramp(1.0).lerp(r).in_quad()
+                }
+            };
+
+            let fr1 = {
+                let dt = s.t - t1;
+                let len = (60.0 / s.bpm) * pd1.fr();
+
+                if dt >= len {
+                    r.hi
+                } else {
+                    (dt / len).ramp(1.0).lerp(r).in_quad()
+                }
+            };
+
+            l.split(s.palette.color0(s, 0.0) * fr0, s.palette.color1(s, 0.0) * fr1);
+
+            l.for_each_beam(|beam, i, fr| BeamPattern::Square.apply(s, Pd(2, 1), beam, i, fr));
+            l.for_each_spider(|spider, i, fr| SpiderPattern::Alternate { pd: Pd(2, 1) }.apply(s, spider, i, fr));
         }
         _ => {}
     }
@@ -561,10 +735,34 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
     // Global brightness
     l.map_colors(|c| c * s.brightness);
 
+    l.laser.size = 0.75;
+    l.laser.pattern = LaserPattern::LineX;
+    l.laser.y = 0.375;
+    l.laser.x = s.pd(Pd(4, 1)).tri(1.0) + 0.25 * 0.25;
+    // l.laser.color = LaserColor::from_rgb(s.palette.color0(s, 0.0).into());
+    l.laser.color = LaserColor::RGB;
+
     // for b in &mut l.beams {
-    //     b.pitch = s.test0;
-    //     b.yaw = s.test1;
+    //     b.pitch = s.test4;
+    //     // b.yaw = s.test1;
     // }
+    // l.beams[0].pitch = s.test2;
+    // l.beams[1].pitch = s.test3;
+    // l.beams[2].pitch = s.test3;
+    // l.beams[3].pitch = s.test2;
+    // // if s.test0 < 0.55
+    // s.test0 = s.test0.min(0.66);
+    // s.test1 = s.test1.min(0.66);
+    // l.beams[0].yaw = s.test0;
+    // l.beams[1].yaw = s.test1;
+    // if s.test1 < 0.66 {
+    //     l.beams[2].yaw = (0.66 - s.test1);
+    // }
+    // if s.test0 < 0.66 {
+    //     l.beams[3].yaw = (0.66 - s.test0);
+    // }
+    // l.beams[2].yaw = s.test2;
+    // l.beams[3].yaw = s.test3;
 
     l.send();
 }
@@ -645,8 +843,8 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
         set(3, 5, color0 * beat116);
         set(4, 5, color1 * beat116);
         set(5, 5, color1 * beat116);
-        set(6, 5, color1 * beat132);
-        set(7, 5, color1 * beat132);
+        set(6, 5, Rgb::WHITE * beat132);
+        set(7, 5, Rgb::WHITE * beat132);
         // set(
         //     6,
         //     7,
@@ -674,7 +872,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
         set(3, 6, Rgb::CYAN);
         set(4, 6, Rgb::CYAN);
         set(5, 6, Rgb::MINT);
-        set(6, 6, Rgb::LIME);
+        set(6, 6, Palette::Oscillate.color0(s, 0.0).into());
         set(7, 6, Rgb::WHITE);
 
         // set(2, 6, Rgb::CYAN);
@@ -722,14 +920,10 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
     } else {
         match s.mode {
             Mode::On => {
-                let color = match s.palette {
-                    Palette::Rainbow => Rgb::hsv(s.phi(16, 1), 1.0, 1.0).into(),
-                    Palette::Solid(col) => col.into(),
-                    Palette::Split(col0, col1) => col0.into(),
-                };
+                let color = s.palette.color0(s, 0.0);
                 for i in 0..8 {
                     for j in 0..8 {
-                        set(i, j, color);
+                        set(i, j, color.into());
                     }
                 }
             }
@@ -743,46 +937,76 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                 }
             }
             Mode::Whirl { pd } => {
-                // let line = |x|
-                for i in 0..8 {
-                    for j in 0..8 {
-                        let (i0, j0) = (i, j);
-                        let (i, j) = ((i as f64 / 7.0) * 2.0 - 1.0, (j as f64 / 7.0) * 2.0 - 1.0);
-                        let (u, v) = ((i * i + j * j).sqrt(), j.atan2(i));
-
-                        let swirl = 0.5; // s.test0;
-                        let spokes = 2.0; // (4.0 * s.test1).floor();
-                        let speed = 8.0;
-
-                        let step = |thres, t: f64| if t < thres { 0.0 } else { 1.0 };
-                        let smoothstep = |thres: f64, epsilon: f64, t: f64| {
-                            let (start, end) = ((thres - epsilon, thres + epsilon));
-
-                            if t < start {
-                                0.0
-                            } else if t >= start && t <= end {
-                                t.map(start..end, 0.0..1.0).inout_quad()
-                            } else {
-                                1.0
-                            }
-                        };
-
-                        let fr = smoothstep(0.0, 1.0, ((4.0 * swirl / u) + (spokes * v) + (speed * s.t)).sin());
-
-                        set(i0, j0, Rgb::from(s.palette.color0(s, 0.0)) * fr);
+                for x in 0..8 {
+                    for y in 0..8 {
+                        set(x, y, Rgb::from(s.palette.color0(s, 0.0)) * spiral(s.t, x, y, 8.0));
                     }
                 }
+            }
+            Mode::RaisingBeams { .. } | Mode::Break { beams: Some(BeamPattern::WaveY) } => {
+                // Up/down wave
+                // let y0 = (.floor() as i8;
+                for x in 0..8 {
+                    for y in 0..8 {
+                        let fr = y as f64 / 7.0;
+                        let env = s.phi(4, 1).tri(1.0).phase(1.0, fr).out_exp();
+                        set(x, y, Rgb::from(s.palette.color0(s, 0.0)) * (1.0 - env));
+                        // if y == y0 {
+                        //     set(x, y, s.palette.color0(s, 0.0).into());
+                        // } else {
+                        //     set(x, y, Rgb::BLACK);
+                        // }
+                    }
+                }
+            }
+            Mode::Strobe { pd, duty } | Mode::Strobe0 { pd, duty } | Mode::Strobe1 { pd, duty } => {
+                let env = s.pd(pd).square(1.0, duty.in_exp().lerp(1.0..0.5));
+                let col = Rgb::from(s.palette.color0(s, 0.0)) * env;
 
-                /*
+                // Solid strobe
+                for i in 0..8 {
+                    for j in 0..8 {
+                        set(i, j, col);
+                    }
+                }
+            }
+            Mode::ManualBeat { t0, t1, pd0, pd1, r } => {
+                let fr0 = {
+                    let dt = s.t - t0;
+                    let len = (60.0 / s.bpm) * pd0.fr();
 
-                   vec2 st = vec2(length(uv), atan(uv.y, uv.x));
+                    if dt >= len {
+                        r.hi
+                    } else {
+                        (dt / len).ramp(1.0).lerp(r).in_quad()
+                    }
+                };
 
-                   float v = aa_step(0, sin(4*u.swirl/st.x + u.spokes*st.y + 8*u.speed*c.t))
-                       * smoothstep(1-u.cutoff, 1-u.cutoff + 0.7, st.x);
+                let fr1 = {
+                    let dt = s.t - t1;
+                    let len = (60.0 / s.bpm) * pd1.fr();
 
-                   color = vec4(u.col, 1.0) * vec4(vec3(v), 1.0);
+                    if dt >= len {
+                        r.hi
+                    } else {
+                        (dt / len).ramp(1.0).lerp(r).in_quad()
+                    }
+                };
 
-                */
+                let fr = fr0.max(fr1);
+
+                for i in 0..8 {
+                    for j in 0..8 {
+                        set(i, j, Rgb::from(s.palette.color0(s, 0.0)) * fr);
+                    }
+                }
+            }
+            Mode::Chase { pd, .. } => {
+                for x in 0..8 {
+                    for y in 0..8 {
+                        set(x, y, Rgb::WHITE * spiral(s.t, x, y, 12.0));
+                    }
+                }
             }
             _ => {
                 for i in 0..8 {
@@ -797,6 +1021,29 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
     pad.send(Output::Batch(batch));
 }
 
+fn spiral(time: f64, x: i8, y: i8, speed: f64) -> f64 {
+    let (x, y) = ((x as f64 / 7.0) * 2.0 - 1.0, (y as f64 / 7.0) * 2.0 - 1.0);
+    let (u, v) = ((x * x + y * y).sqrt(), y.atan2(x));
+
+    let swirl = 0.5; // s.test0;
+    let spokes = 2.0; // (4.0 * s.test1).floor();
+
+    let step = |thres, t: f64| if t < thres { 0.0 } else { 1.0 };
+    let smoothstep = |thres: f64, epsilon: f64, t: f64| {
+        let (start, end) = ((thres - epsilon, thres + epsilon));
+
+        if t < start {
+            0.0
+        } else if t >= start && t <= end {
+            t.map(start..end, 0.0..1.0).inout_quad()
+        } else {
+            1.0
+        }
+    };
+
+    smoothstep(0.0, 1.0, ((4.0 * swirl / u) + (spokes * v) + (speed * time)).sin())
+}
+
 ///////////////////////// CTRL /////////////////////////
 
 pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
@@ -809,7 +1056,7 @@ pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
 pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     s.dt = dt;
     s.t += dt;
-    s.phi = (s.phi + (dt * (s.bpm / 60.0))).fmod(16.0);
+    s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(16.0);
 }
 
 ///////////////////////// PAD INPUT /////////////////////////
@@ -825,9 +1072,37 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             s.debug = !s.debug;
             pad.send(Output::Clear);
         }
-        Input::Custom(true) => s.mode = Mode::Whirl { pd: Pd(16, 1) },
+        // Toggle laser
+        Input::Custom(true) => l.laser.on = !l.laser.on,
+        // Brightness
+        Input::Record(true) => s.brightness = 0.07,
+        Input::Solo(true) => s.brightness = 0.1,
+        Input::Mute(true) => s.brightness = 0.125,
+        Input::Stop(true) => s.brightness = 0.3,
+        Input::B(true) => s.brightness = 0.4,
+        Input::A(true) => s.brightness = 0.6,
+        Input::Pan(true) => s.brightness = 0.8,
+        Input::Volume(true) => s.brightness = 1.0,
+        // half/double-time
+        Input::Up(true) => s.phi_mul = 2.0,
+        Input::Down(true) => s.phi_mul = 0.5,
         _ => {}
     }
+
+    let beat0 = |pd: Pd, s: &mut State, r: Range| match &mut s.mode {
+        Mode::ManualBeat { t0, t1, pd0, pd1, r } => {
+            *t0 = s.t;
+            *pd0 = pd;
+        }
+        _ => s.mode = Mode::ManualBeat { t0: s.t, t1: 0.0, pd0: pd, pd1: pd, r },
+    };
+    let beat1 = |pd: Pd, s: &mut State, r: Range| match &mut s.mode {
+        Mode::ManualBeat { t1, pd1, .. } => {
+            *t1 = s.t;
+            *pd1 = pd;
+        }
+        _ => s.mode = Mode::ManualBeat { t0: 0.0, t1: s.t, pd0: pd, pd1: pd, r },
+    };
 
     // First match on x/y presses only.
     if let Some((x, y)) = match event {
@@ -835,6 +1110,9 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         _ => None,
     } {
         log::info!("Pad({x}, {y})");
+
+        s.phi_mul = 1.0;
+
         match (x, y) {
             // Beatmatch
             (0, 7) => s.bpm_taps.push(s.t),
@@ -858,24 +1136,25 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             },
 
             // Manual beats
-            // (0, 0) => s.mode = Mode::Beat { t: s.t, pd: Pd(4, 1), r: (1.0..0.0).into() },
-            // (0, 1) => s.mode = Mode::Beat { t: s.t, pd: Pd(2, 1), r: (1.0..0.0).into() },
-            // (0, 2) => s.mode = Mode::Beat { t: s.t, pd: Pd(1, 1), r: (1.0..0.0).into() },
-            // (0, 3) => s.mode = Mode::Beat { t: s.t, pd: Pd(1, 2), r: (1.0..0.0).into() },
-            // (0, 4) => s.mode = Mode::Beat { t: s.t, pd: Pd(1, 4), r: (1.0..0.0).into() },
-            // (7, 0) => s.mode = Mode::Beat { t: s.t, pd: Pd(4, 1), r: (1.0..0.0).into() },
-            // (7, 1) => s.mode = Mode::Beat { t: s.t, pd: Pd(2, 1), r: (1.0..0.0).into() },
-            // (7, 2) => s.mode = Mode::Beat { t: s.t, pd: Pd(1, 1), r: (1.0..0.0).into() },
-            // (7, 3) => s.mode = Mode::Beat { t: s.t, pd: Pd(1, 2), r: (1.0..0.0).into() },
-            // (7, 4) => s.mode = Mode::Beat { t: s.t, pd: Pd(1, 4), r: (1.0..0.0).into() },
+            (0, 0) => beat0(Pd(4, 1), s, (1.0..0.0).into()),
+            (0, 1) => beat0(Pd(2, 1), s, (1.0..0.0).into()),
+            (0, 2) => beat0(Pd(1, 1), s, (1.0..0.0).into()),
+            (0, 3) => beat0(Pd(1, 2), s, (1.0..0.0).into()),
+            (0, 4) => beat0(Pd(1, 4), s, (1.0..0.0).into()),
+            (7, 0) => beat1(Pd(4, 1), s, (1.0..0.0).into()),
+            (7, 1) => beat1(Pd(2, 1), s, (1.0..0.0).into()),
+            (7, 2) => beat1(Pd(1, 1), s, (1.0..0.0).into()),
+            (7, 3) => beat1(Pd(1, 2), s, (1.0..0.0).into()),
+            (7, 4) => beat1(Pd(1, 4), s, (1.0..0.0).into()),
 
             // y=0: Lights off, or a brief pause/break
             (1, 0) => s.mode = Mode::Off,
-            (2, 0) => s.mode = Mode::Off,
-            (3, 0) => s.mode = Mode::Off,
-            (4, 0) => s.mode = Mode::Off,
-            (5, 0) => s.mode = Mode::Off,
-            (6, 0) => s.mode = Mode::Off,
+            (1, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::Center) },
+            (2, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::Out) },
+            (3, 0) => s.mode = Mode::RaisingBeams { pd: Pd(4, 1) },
+            (4, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::WaveY) },
+            (5, 0) => s.mode = Mode::Whirl { pd: Pd(16, 1) },
+            (6, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::UpDownWave) },
 
             // y=1: Solid patterns
             (1, 1) => s.mode = Mode::On,
@@ -887,7 +1166,7 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
 
             (1, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (2, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
-            (3, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
+            (3, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
             (4, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (5, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (6, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
@@ -903,21 +1182,21 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
 
             // y=4: Pd(1, 1) patterns
             (1, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
-            (2, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
+            (2, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
             (3, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (4, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (5, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (6, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
 
             // y=5: Strobes
-            (0, 5) => s.mode = Mode::Strobe0 { pd: Pd(1, 4), duty: 1.0 },
-            (1, 5) => s.mode = Mode::Strobe1 { pd: Pd(1, 4), duty: 1.0 },
+            (0, 5) => s.mode = Mode::Strobe0 { pd: Pd(1, 8), duty: 1.0 },
+            (1, 5) => s.mode = Mode::Strobe1 { pd: Pd(1, 8), duty: 1.0 },
             (2, 5) => s.mode = Mode::Strobe { pd: Pd(1, 4), duty: 1.0 },
-            (3, 5) => s.mode = Mode::Strobe { pd: Pd(1, 4), duty: 1.0 },
-            (4, 5) => s.mode = Mode::Strobe { pd: Pd(1, 4), duty: 1.0 },
-            (5, 5) => s.mode = Mode::Strobe { pd: Pd(1, 4), duty: 1.0 },
-            (6, 5) => s.mode = Mode::Chase { pd: Pd(1, 2) },
-            (7, 5) => s.mode = Mode::Chase { pd: Pd(1, 4) },
+            (3, 5) => s.mode = Mode::Strobe { pd: Pd(1, 8), duty: 1.0 },
+            (4, 5) => s.mode = Mode::Strobe { pd: Pd(1, 8), duty: 1.0 },
+            (5, 5) => s.mode = Mode::ChaseNotColorful { pd: Pd(1, 4) },
+            (6, 5) => s.mode = Mode::Chase { pd: Pd(1, 2), beam: BeamPattern::Twisting },
+            (7, 5) => s.mode = Mode::Chase { pd: Pd(1, 4), beam: BeamPattern::Twisting },
 
             // y=?: Strobes
 
@@ -964,7 +1243,7 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             // Colorz
             (1, 7) => s.palette = Palette::Solid(Rgbw::RED),
             (2, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::MAGENTA),
-            (3, 7) => s.palette = Palette::Solid(Rgbw::MAGENTA),
+            (3, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::BLUE),
             (4, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::VIOLET),
             (5, 7) => s.palette = Palette::Split(Rgbw::VIOLET, Rgbw::RED),
             (6, 7) => s.palette = Palette::Rainbow,
@@ -975,7 +1254,7 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             (3, 6) => s.palette = Palette::Split(Rgbw::CYAN, Rgbw::LIME),
             (4, 6) => s.palette = Palette::Split(Rgbw::MINT, Rgbw::MINT),
             (5, 6) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::LIME),
-            (6, 6) => s.palette = Palette::Solid(Rgbw::LIME),
+            (6, 6) => s.palette = Palette::Oscillate,
             (7, 6) => s.palette = Palette::Solid(Rgbw::RGBW),
 
             // set(1, 7, Rgb::RED);
@@ -1066,18 +1345,24 @@ pub fn on_ctrl(s: &mut State, l: &mut Lights, ctrl: &mut Midi<LaunchControlXL>, 
 
         // laser tweaks
         Input::Focus(0, true) => l.laser.on = !l.laser.on,
+
+        // Input::Slider(1, fr) => s.test0 = fr,
+        // Input::Slider(2, fr) => s.test1 = fr,
+        // Input::Slider(3, fr) => s.test2 = fr,
+        // Input::Slider(4, fr) => s.test3 = fr,
+        // Input::Slider(5, fr) => s.test4 = fr,
         Input::Slider(1, fr) => {
             l.laser.pattern = LaserPattern::Raw(fr.byte());
             println!("{:?}", l.laser.pattern);
         }
         Input::Slider(2, fr) => l.laser.rotate = fr,
-        Input::Slider(3, fr) => l.laser.x = fr,
+        // Input::Slider(3, fr) => l.laser.x = fr,
         Input::Slider(4, fr) => l.laser.y = fr,
         Input::Slider(5, fr) => l.laser.size = fr,
         Input::Slider(6, fr) => l.laser.color = LaserColor::Raw(fr.byte()),
 
-        // Input::Slider(3, fr) => l.laser.xflip = fr,
-        // Input::Slider(4, fr) => l.laser.yflip = fr,
+        Input::Slider(3, fr) => l.laser.xflip = fr,
+        Input::Slider(4, fr) => l.laser.yflip = fr,
         _ => {}
     }
 }

@@ -47,7 +47,7 @@ impl Lights {
         self.bars = Default::default();
         self.spiders = Default::default();
         self.strobe = Default::default();
-        self.laser = Default::default();
+        // self.laser = Default::default();
     }
 
     pub fn send(&mut self) {
@@ -79,7 +79,7 @@ impl Lights {
         self.for_each_beam(|beam, i, fr| beam.color = col1);
         self.for_each_spider(|spider, i, fr| {
             spider.color0 = col1;
-            spider.color1 = col0;
+            spider.color0 = col1;
         });
         self.for_each_bar(|bar, i, fr| bar.color = col1.into());
         self.strobe.color = col0.into();
