@@ -79,7 +79,7 @@ impl Lights {
         self.for_each_beam(|beam, i, fr| beam.color = col1);
         self.for_each_spider(|spider, i, fr| {
             spider.color0 = col1;
-            spider.color0 = col1;
+            spider.color1 = col1;
         });
         self.for_each_bar(|bar, i, fr| bar.color = col1.into());
         self.strobe.color = col0.into();
