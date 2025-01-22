@@ -1,6 +1,8 @@
 use anyhow::Result;
 use itertools::Itertools;
+use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use stagebridge::color::{Rgb, Rgbw};
 use stagebridge::dmx::device::beam_rgbw_60w::Beam;
 use stagebridge::dmx::device::laser_scan_30w::{Laser, LaserColor, LaserPattern};
@@ -58,6 +60,11 @@ pub struct State {
     /// Manual beat
     pub beat: Option<ManualBeat>,
 
+    /// Preset loop
+    pub preset: bool,
+    /// Whether we've swapped the preset yet
+    pub preset_switched: bool,
+
     /// Global brightness modifier
     pub brightness: f64,
 
@@ -101,13 +108,17 @@ impl State {
     }
 }
 
+///////////////////////// LOCKOUT /////////////////////////
+
 #[derive(Debug, Default)]
 pub enum Mode {
     /// All off
     #[default]
     Off,
     /// All on, solid color
-    On { beams: Option<BeamPattern> },
+    On {
+        beams: Option<BeamPattern>,
+    },
     /// TODO: ???
     Hover,
     /// Flashing to the beat
@@ -133,6 +144,10 @@ pub enum Mode {
         duty: f64,
     },
     Chase {
+        pd: Pd,
+        beam: BeamPattern,
+    },
+    ChaseSmooth {
         pd: Pd,
         beam: BeamPattern,
     },
@@ -165,6 +180,7 @@ pub enum Palette {
     Rainbow,
     RgbOsc,
     RainbowOsc,
+    RedWhiteOsc,
     /// Solid color
     Solid(Rgbw),
     Split(Rgbw, Rgbw),
@@ -188,6 +204,10 @@ impl Palette {
                 5 => Rgbw::CYAN,
                 6 => Rgbw::BLUE,
                 _ => Rgbw::MAGENTA,
+            },
+            Palette::RedWhiteOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
+                ..0.5 => Rgbw::RED,
+                _ => Rgbw::WHITE,
             },
             Palette::Solid(col) => col,
             Palette::Split(col0, _col1) => col0,
@@ -307,7 +327,7 @@ impl BeamPattern {
     fn angles(self, s: &mut State, pd: Pd, i: usize, fr: f64) -> (f64, f64) {
         match self {
             BeamPattern::Down => (0.0, 0.0),
-            BeamPattern::Out => (0.5, 0.33),
+            BeamPattern::Out => (0.5, 0.0),
             BeamPattern::Center => (
                 0.85,
                 match i {
@@ -385,7 +405,7 @@ impl BeamPattern {
                         // true => t,
                         // false => 1.0 - t,
                     };
-                (pitch, 1.0)
+                (1.0 - pitch, 0.0)
             }
             BeamPattern::Square => {
                 let t_pitch = s.pd(pd.mul(4)).phase(1.0, 0.25).square(1.0, 0.5);
@@ -411,7 +431,7 @@ impl BeamPattern {
                 }
             }
             BeamPattern::RaisingBeams => {
-                let angle = (s.pd(pd) + fr * 2.0) % 1.0;
+                let angle = (s.pd(pd.mul(2)) + fr * 2.0) % 1.0;
                 // let
                 let pitch = if angle < 0.7 {
                     (0.5 - angle / 0.7 * 0.5)
@@ -420,6 +440,7 @@ impl BeamPattern {
                 } else {
                     (0.5 - (angle - 0.9))
                 };
+                let pitch = 1.0 - pitch;
 
                 (pitch * 0.9, 0.0)
             }
@@ -571,7 +592,11 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
     l.reset();
 
     match s.mode {
-        Mode::Off => {}
+        Mode::Off => {
+            l.for_each_beam(|beam, i, fr| {
+                BeamPattern::Out.apply(s, Pd(4, 1), beam, i, fr);
+            });
+        }
         Mode::On { beams } => {
             l.split(s.palette.color0(s, 0.0), s.palette.color1(s, 0.0));
 
@@ -675,6 +700,15 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
             l.for_each_beam(|beam, i, fr| {
                 beam.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1);
                 beam_pattern.apply(s, Pd(1, 2), beam, i, fr);
+            });
+            l.strobe.color = Rgb::WHITE * s.pd(pd.mul(4)).phase(1.0, 0.0).square(1.0, 0.1);
+        }
+        Mode::ChaseSmooth { pd, beam: beam_pattern } => {
+            let color = s.palette.color0(s, s.pd(pd));
+            l.for_each_par(|par, i, fr| par.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0));
+            l.for_each_beam(|beam, i, fr| {
+                beam.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0);
+                beam_pattern.apply(s, Pd(4, 1), beam, i, fr);
             });
         }
         Mode::ChaseNotColorful { pd } => {
@@ -871,48 +905,28 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
         set(2, 5, color0 * beat116);
         set(3, 5, color0 * beat116);
         set(4, 5, color1 * beat116);
-        set(5, 5, color1 * beat116);
+        set(5, 5, Rgb::WHITE * beat116);
         set(6, 5, Rgb::WHITE * beat132);
         set(7, 5, Rgb::WHITE * beat132);
-        // set(
-        //     6,
-        //     7,
-        //     match s.phi(1, 4) {
-        //         ..0.33 => Rgb::RED,
-        //         0.33..0.66 => Rgb::LIME,
-        //         _ => Rgb::BLUE,
-        //     },
-        // );
 
         // y=6, y=7: Colorz
-        //   red, red/blue, red/purple, pink,
-        //   blue, blue/green, blue/teal, green,
-        //   rainbow, white, rgbw
-        set(1, 7, Rgb::RED);
-        set(2, 7, Rgb::RED);
-        set(3, 7, Rgb::MAGENTA);
-        set(4, 7, Rgb::PINK);
-        set(5, 7, Rgb::hsv(s.phi(16, 1), 1.0, 1.0));
-        set(6, 7, Palette::RainbowOsc.color0(s, 0.0).into());
-
+        // Sidez
         set(0, 6, Rgb::WHITE);
-        set(1, 6, Rgb::BLUE);
-        set(2, 6, Rgb::BLUE);
-        set(3, 6, Rgb::CYAN);
-        set(4, 6, Rgb::CYAN);
-        set(5, 6, Rgb::MINT);
-        set(6, 6, Palette::RgbOsc.color0(s, 0.0).into());
         set(7, 6, Rgb::WHITE);
-
-        // set(2, 6, Rgb::CYAN);
-        // set(3, 6, Rgb::BLUE);
-        // set(4, 6, Rgb::VIOLET);
-        // set(5, 6, Rgb::MAGENTA);
-
-        // set(2, 7, Rgb::RED);
-        // set(3, 7, Rgb::ORANGE);
-        // set(4, 7, Rgb::YELLOW);
-        // set(5, 7, Rgb::LIME);
+        // Redz
+        set(1, 6, Rgb::RED);
+        set(2, 6, Rgb::RED * 0.5);
+        set(3, 6, Rgb::RED * 0.5);
+        set(1, 7, Rgb::WHITE);
+        set(2, 7, Rgb::WHITE);
+        set(3, 7, Palette::RedWhiteOsc.color0(s, 0.0).into());
+        // Greenz n Bluez
+        set(4, 6, Rgb::LIME);
+        set(4, 7, Rgb::WHITE);
+        set(5, 6, Rgb::BLUE);
+        set(5, 7, Rgb::LIME);
+        set(6, 6, Rgb::BLUE);
+        set(6, 7, Rgb::WHITE);
 
         // Left and right edges: manual beat buttons
         for i in 0..=4 {
@@ -937,7 +951,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                 for j in 0..8 {
                     let fr0 = {
                         let dt = s.t - t0;
-                        let len = (60.0 / s.bpm) * pd0.fr();
+                        let len = (60.0 / s.bpm) * pd0.div(2).fr();
 
                         let ofs = i as f64 / 8.0;
                         let t = (dt / len) - ofs + 0.0;
@@ -952,7 +966,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
 
                     let fr1 = {
                         let dt = s.t - t1;
-                        let len = (60.0 / s.bpm) * pd1.fr();
+                        let len = (60.0 / s.bpm) * pd1.div(2).fr();
 
                         let ofs = 1.0 - (i as f64 / 8.0);
                         let t = (dt / len) - ofs + 0.125;
@@ -993,7 +1007,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                                     set(j, i, col.into());
                                 }
                             }
-                        },
+                        }
                         2 => {
                             // Sideways propagating wave at BPM
                             for i in 0..8 {
@@ -1002,25 +1016,27 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                                     set(i, j, col.into());
                                 }
                             }
-                        },
+                        }
                         3 => {
                             // Sideways staggered propagating wave at BPM
                             for i in 0..8 {
                                 for j in 0..8 {
-                                    let col = s.palette.color0(s, 0.0) * (s.phi - i as f64 * 0.125 + j as f64 * 0.125).fsin(2.0).in_quad();
+                                    let col = s.palette.color0(s, 0.0)
+                                        * (s.phi - i as f64 * 0.125 + j as f64 * 0.125).fsin(2.0).in_quad();
                                     set(i, j, col.into());
                                 }
                             }
-                        },
+                        }
                         4 => {
                             // Sideways staggered propagating wave at BPM
                             for i in 0..8 {
                                 for j in 0..8 {
-                                    let col = s.palette.color0(s, 0.0) * (s.phi - i as f64 * 0.125 + j as f64 * 0.125).fsin(2.0).in_quad();
+                                    let col = s.palette.color0(s, 0.0)
+                                        * (s.phi - i as f64 * 0.125 + j as f64 * 0.125).fsin(2.0).in_quad();
                                     set(j, i, col.into());
                                 }
                             }
-                        },
+                        }
                         5 => {
                             // Whirl
                             for x in 0..8 {
@@ -1028,7 +1044,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                                     set(x, y, Rgb::from(s.palette.color0(s, 0.0)) * spiral(s.t, x, y, -8.0));
                                 }
                             }
-                        },
+                        }
                         _ => {
                             // Downards propagating wave at BPM
                             for i in 0..8 {
@@ -1037,7 +1053,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
                                     set(j, i, col.into());
                                 }
                             }
-                        },
+                        }
                     }
                 }
                 Mode::Whirl { pd } => {
@@ -1155,6 +1171,26 @@ pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     s.dt = dt;
     s.t += dt;
     s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(16.0);
+
+    if s.preset {
+        let phi = (s.phi(16, 1) * 4.0) as usize;
+        if phi % 4 == 0 {
+            if !s.preset_switched {
+                log::info!("SWITCH");
+                s.preset_switched = true;
+                match ThreadRng::default().gen_range(1..=6) {
+                    1 => s.mode = Mode::ChaseSmooth { pd: Pd(1, 1), beam: BeamPattern::WaveY },
+                    2 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
+                    3 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+                    4 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
+                    5 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
+                    6 | _ => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
+                }
+            }
+        } else {
+            s.preset_switched = false;
+        }
+    }
 }
 
 ///////////////////////// PAD INPUT /////////////////////////
@@ -1163,6 +1199,15 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
     use self::Mode;
     use launchpad_x::{types::*, *};
     // log::debug!("pad: {event:?}");
+
+    // Toggle preset mode, lockout other inputs
+    if let Input::Custom(true) = event {
+        s.preset = !s.preset;
+        log::info!("preset={}", s.preset);
+    }
+    if s.preset {
+        return;
+    }
 
     match event {
         // Toggle debug mode
@@ -1181,9 +1226,10 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         Input::A(true) => s.brightness = 0.6,
         Input::Pan(true) => s.brightness = 0.8,
         Input::Volume(true) => s.brightness = 1.0,
-        // half/double-time
+        // half/double/normal time
         Input::Up(true) => s.phi_mul = 2.0,
         Input::Down(true) => s.phi_mul = 0.5,
+        Input::Left(true) => s.phi_mul = 1.0,
         _ => {}
     }
 
@@ -1213,7 +1259,11 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
 
         s.phi_mul = 1.0;
 
-        if !(x == 0 && y < 5) && !(x == 7 && y < 5) {
+        let is_left_beat = x == 0 && y < 5;
+        let is_right_beat = x == 7 && y < 5;
+        let is_color = y == 6 || y == 7 && x > 0 && x < 7;
+        let is_side_color = (x == 0 && y == 6) || (x == 7 && y == 6);
+        if !is_left_beat && !is_right_beat && !is_color && !is_side_color {
             s.beat = None;
         }
 
@@ -1253,51 +1303,51 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
 
             // y=0: Lights off, or a brief pause/break
             (1, 0) => s.mode = Mode::Off,
-            (1, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::Center) },
             (2, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::Out) },
-            (3, 0) => s.mode = Mode::RaisingBeams { pd: Pd(4, 1) },
-            (4, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::WaveY) },
+            (3, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::WaveY) },
+            (4, 0) => s.mode = Mode::RaisingBeams { pd: Pd(8, 1) },
             (5, 0) => s.mode = Mode::Whirl { pd: Pd(16, 1) },
             (6, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::UpDownWave) },
 
             // y=1: Solid patterns
-            (1, 1) => s.mode = Mode::On { beams: None },
-            (2, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Twisting) },
-            (3, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Square) },
-            (4, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Whirl) },
-            (5, 1) => s.mode = Mode::On { beams: Some(BeamPattern::SnapX) },
-            (6, 1) => s.mode = Mode::On { beams: Some(BeamPattern::WaveY) },
+            (1, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Out) },
+            (2, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Out) },
+            (3, 1) => s.mode = Mode::On { beams: Some(BeamPattern::WaveY) },
+            (4, 1) => s.mode = Mode::On { beams: Some(BeamPattern::SnapX) },
+            (5, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Whirl) },
+            (6, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Twisting) },
 
-            (1, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
+            (1, 2) => s.mode = Mode::ChaseSmooth { pd: Pd(1, 1), beam: BeamPattern::WaveY },
             (2, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
-            (3, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
-            (4, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
-            (5, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
-            (6, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::SnapX },
+            (3, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+            (4, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
+            (5, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
+            (6, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
 
             // y=3: Pd(2, 1) patterns
-            (1, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
+            (1, 3) => s.mode = Mode::ChaseSmooth { pd: Pd(1, 2), beam: BeamPattern::Square },
+            // (1, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (2, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
-            (3, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
-            (4, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
-            (5, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
-            (6, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+            (3, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+            (4, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
+            (5, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
+            (6, 3) => s.mode = Mode::AutoBeat { pd: Pd(2, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
 
             // y=4: Pd(1, 1) patterns
             (1, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Square },
             (2, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
-            (3, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
-            (4, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
-            (5, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
-            (6, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+            (3, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+            (4, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
+            (5, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
+            (6, 4) => s.mode = Mode::AutoBeat { pd: Pd(1, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
 
             // y=5: Strobes
             (0, 5) => s.mode = Mode::Strobe0 { pd: Pd(1, 8), duty: 1.0 },
-            (1, 5) => s.mode = Mode::Strobe1 { pd: Pd(1, 8), duty: 1.0 },
+            (1, 5) => s.mode = Mode::ChaseNotColorful { pd: Pd(1, 4) },
             (2, 5) => s.mode = Mode::Strobe { pd: Pd(1, 4), duty: 1.0 },
             (3, 5) => s.mode = Mode::Strobe { pd: Pd(1, 8), duty: 1.0 },
             (4, 5) => s.mode = Mode::Strobe { pd: Pd(1, 8), duty: 1.0 },
-            (5, 5) => s.mode = Mode::ChaseNotColorful { pd: Pd(1, 4) },
+            (5, 5) => s.mode = Mode::Chase { pd: Pd(1, 1), beam: BeamPattern::Twisting },
             (6, 5) => s.mode = Mode::Chase { pd: Pd(1, 2), beam: BeamPattern::Twisting },
             (7, 5) => s.mode = Mode::Chase { pd: Pd(1, 4), beam: BeamPattern::Twisting },
 
@@ -1344,37 +1394,23 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             // },
 
             // Colorz
-            (1, 7) => s.palette = Palette::Solid(Rgbw::RED),
-            (2, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::BLUE),
-            (3, 7) => s.palette = Palette::Split(Rgbw::MAGENTA, Rgbw::RED),
-            (4, 7) => s.palette = Palette::Split(Rgbw::VIOLET, Rgbw::BLUE),
-            (5, 7) => s.palette = Palette::Rainbow,
-            (6, 7) => s.palette = Palette::RainbowOsc,
-
+            // Sidez
             (0, 6) => s.palette = Palette::Solid(Rgbw::WHITE),
-            (1, 6) => s.palette = Palette::Solid(Rgbw::BLUE),
-            (2, 6) => s.palette = Palette::Split(Rgbw::BLUE, Rgbw::CYAN),
-            (3, 6) => s.palette = Palette::Split(Rgbw::CYAN, Rgbw::LIME),
-            (4, 6) => s.palette = Palette::Split(Rgbw::MINT, Rgbw::MINT),
-            (5, 6) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::LIME),
-            (6, 6) => s.palette = Palette::RgbOsc,
             (7, 6) => s.palette = Palette::Solid(Rgbw::RGBW),
-
-            // set(1, 7, Rgb::RED);
-            // set(2, 7, Rgb::RED);
-            // set(3, 7, Rgb::MAGENTA);
-            // set(4, 7, Rgb::PINK);
-            // set(5, 7, Rgb::VIOLET);
-            // set(6, 7, Rgb::hsv(s.phi(16, 1), 1.0, 1.0));
-
-            // set(0, 6, Rgb::WHITE);
-            // set(1, 6, Rgb::BLUE);
-            // set(2, 6, Rgb::BLUE);
-            // set(3, 6, Rgb::CYAN);
-            // set(4, 6, Rgb::CYAN);
-            // set(5, 6, Rgb::MINT);
-            // set(6, 6, Rgb::LIME);
-            // set(7, 6, Rgb::WHITE);
+            // Redz
+            (1, 6) => s.palette = Palette::Solid(Rgbw::RED),
+            (2, 6) => s.palette = Palette::Split(Rgbw::RED, Rgbw::BLACK),
+            (3, 6) => s.palette = Palette::Split(Rgbw::BLACK, Rgbw::RED),
+            (1, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::WHITE),
+            (2, 7) => s.palette = Palette::Split(Rgbw::WHITE, Rgbw::RED),
+            (3, 7) => s.palette = Palette::RedWhiteOsc,
+            // Greenz n Bluez
+            (4, 6) => s.palette = Palette::Solid(Rgbw::LIME),
+            (4, 7) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::WHITE),
+            (5, 6) => s.palette = Palette::Solid(Rgbw::BLUE),
+            (5, 7) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::BLUE),
+            (6, 6) => s.palette = Palette::Split(Rgbw::BLUE, Rgbw::WHITE),
+            (6, 7) => s.palette = Palette::Split(Rgbw::WHITE, Rgbw::BLUE),
 
             // hold pressure env
             // (6, 2) => s.beat0 = Beat::Fr(fr.in_exp()),

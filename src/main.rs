@@ -10,6 +10,7 @@ use itertools::Itertools;
 use rand::seq::SliceRandom;
 use stagebridge::color::{Rgb, Rgbw};
 use stagebridge::dmx::device::laser_scan_30w::{LaserColor, LaserPattern};
+use std::net::UdpSocket;
 use std::time::Instant;
 use std::{thread, time::Duration};
 
@@ -40,15 +41,14 @@ struct Args {
 fn main() -> Result<()> {
     // Set up colorful logging for `log::` calls.
     let args = Args::parse();
+    let level = match args.verbose {
+        0 => log::LevelFilter::Info,
+        1 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    };
     env_logger::builder()
-        .filter_module(
-            "mslive",
-            match args.verbose {
-                0 => log::LevelFilter::Info,
-                1 => log::LevelFilter::Debug,
-                _ => log::LevelFilter::Trace,
-            },
-        )
+        .filter_module("mslive", level)
+        .filter_module("stagebridge", level)
         .format_timestamp(None)
         .format_module_path(false)
         .parse_default_env()
@@ -56,14 +56,20 @@ fn main() -> Result<()> {
 
     Midi::<LaunchpadX>::list();
 
+    // Initialize prodjlink BPM rx socket
+    let prodjlink = UdpSocket::bind("0.0.0.0:42069")?;
+    prodjlink.set_nonblocking(true);
+    let mut bpm = [0u8; 4];
+    log::info!("Listening to prodjlink at {}", prodjlink.local_addr()?);
+
     // Initialize input devices
     // let mut pad = Midi::new("WIDI Uhost", LaunchpadX::default());
-    let mut pad = Midi::new("Launchpad X:Launchpad X LPX MIDI", LaunchpadX::default());
-    let mut ctrl = Midi::new("Launch Control XL:Launch Control XL", LaunchControlXL);
+    let mut pad = Midi::new("Launchpad X LPX MIDI", LaunchpadX::default());
+    let mut ctrl = Midi::new("Launch Control XL", LaunchControlXL);
     {
         use launchpad_x::{types::*, *};
         pad.send(Output::Pressure(Pressure::Off, PressureCurve::Medium));
-        pad.send(Output::Brightness(1.0));
+        pad.send(Output::Brightness(0.0));
     }
 
     // Connect to our lighting rig's Arduino DMX adapter.
@@ -77,6 +83,16 @@ fn main() -> Result<()> {
     eframe::run_simple_native("mslive", Default::default(), move |ctx, _frame| {
         let elapsed = last.elapsed();
         last = Instant::now();
+
+        // Check for prodjlink packets
+        match prodjlink.recv_from(&mut bpm) {
+            Ok(_) => {
+                let bpm = f32::from_le_bytes(bpm) as f64;
+                log::info!("prodjlink bpm={bpm}");
+                state.bpm = bpm;
+            }
+            _ => {}
+        }
 
         let (s, l) = (&mut state, &mut lights);
 

@@ -57,10 +57,15 @@ impl Lights {
             par.encode(&mut dmx[1 + 8 * i..]);
         }
         for (i, beam) in self.beams.iter().enumerate() {
+            let beam = Beam { alpha: beam.alpha * 0.5, ..beam.clone() };
             beam.encode(&mut dmx[81 + 15 * i..]);
         }
         for (i, bar) in self.bars.iter().enumerate() {
-            bar.encode(&mut dmx[149 + 7 * i..]);
+            if bar.color.0 == bar.color.1 && bar.color.1 == bar.color.2 {
+                Bar { alpha: 0.0, color: Rgb::BLACK }.encode(&mut dmx[149 + 7 * i..]);
+            } else {
+                bar.encode(&mut dmx[149 + 7 * i..]);
+            }
         }
         for (i, spider) in self.spiders.iter().enumerate() {
             spider.encode(&mut dmx[175 + 15 * i..]);
