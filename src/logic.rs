@@ -5,6 +5,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use stagebridge::color::{Rgb, Rgbw};
 use stagebridge::dmx::device::beam_rgbw_60w::Beam;
+use stagebridge::dmx::device::beam_rgbw_90w::BigBeam;
 use stagebridge::dmx::device::laser_scan_30w::{Laser, LaserColor, LaserPattern};
 use stagebridge::dmx::device::spider_rgbw_8x10w::Spider;
 use std::time::Instant;
@@ -48,7 +49,7 @@ pub struct State {
     pub bpm: f64,
     /// Timestamps when the beatmatch button was tapped
     pub bpm_taps: Vec<f64>,
-    /// Current fractional beat number in a 16 beat measure at the current `bpm`. Ranges from `0..16` and wraps around
+    /// Current fractional beat number in a 64 beat measure at the current `bpm`. Ranges from `0..64` and wraps around
     pub phi: f64,
     /// Bpm multiplier, e.g. 0.5 for half-time, 2.0 for double-time.
     pub phi_mul: f64,
@@ -110,7 +111,7 @@ impl State {
 
 ///////////////////////// LOCKOUT /////////////////////////
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Mode {
     /// All off
     #[default]
@@ -173,7 +174,7 @@ pub enum Mode {
 
 ///////////////////////// COLOR PALETTE /////////////////////////
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Palette {
     /// Gradually cycling rainbow
     #[default]
@@ -181,6 +182,7 @@ pub enum Palette {
     RgbOsc,
     RainbowOsc,
     RedWhiteOsc,
+    BlueGreenOsc,
     /// Solid color
     Solid(Rgbw),
     Split(Rgbw, Rgbw),
@@ -208,6 +210,10 @@ impl Palette {
             Palette::RedWhiteOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
                 ..0.5 => Rgbw::RED,
                 _ => Rgbw::WHITE,
+            },
+            Palette::BlueGreenOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
+                ..0.5 => Rgbw::BLUE,
+                _ => Rgbw::LIME,
             },
             Palette::Solid(col) => col,
             Palette::Split(col0, _col1) => col0,
@@ -290,7 +296,7 @@ impl WhirlState {
 
 ///////////////////////// BEAM PATTERNS /////////////////////////
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BeamPattern {
     Down,
     Out,
@@ -317,7 +323,7 @@ pub enum BeamPattern {
 }
 
 impl BeamPattern {
-    fn apply(self, s: &mut State, pd: Pd, beam: &mut Beam, i: usize, fr: f64) {
+    fn apply(self, s: &mut State, pd: Pd, beam: &mut BigBeam, i: usize, fr: f64) {
         let (pitch, yaw) = self.angles(s, pd, i, fr);
         beam.pitch = pitch;
         beam.yaw = yaw;
@@ -913,20 +919,23 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
         // Sidez
         set(0, 6, Rgb::WHITE);
         set(7, 6, Rgb::WHITE);
-        // Redz
+        // Primariez
         set(1, 6, Rgb::RED);
-        set(2, 6, Rgb::RED * 0.5);
-        set(3, 6, Rgb::RED * 0.5);
         set(1, 7, Rgb::WHITE);
+        set(2, 6, Rgb::LIME);
         set(2, 7, Rgb::WHITE);
-        set(3, 7, Palette::RedWhiteOsc.color0(s, 0.0).into());
-        // Greenz n Bluez
+        set(3, 6, Rgb::BLUE);
+        set(3, 7, Rgb::WHITE);
+        set(3, 6, Rgb::BLUE);
+        set(3, 7, Rgb::WHITE);
+        // nBluez
         set(4, 6, Rgb::LIME);
-        set(4, 7, Rgb::WHITE);
-        set(5, 6, Rgb::BLUE);
-        set(5, 7, Rgb::LIME);
-        set(6, 6, Rgb::BLUE);
-        set(6, 7, Rgb::WHITE);
+        set(4, 7, Rgb::RED);
+        // Rainbowz
+        set(5, 6, Palette::RedWhiteOsc.color0(s, 0.0).into());
+        set(5, 7, Palette::BlueGreenOsc.color0(s, 0.0).into());
+        set(6, 6, Palette::RgbOsc.color0(s, 0.0).into());
+        set(6, 7, Palette::RainbowOsc.color0(s, 0.0).into());
 
         // Left and right edges: manual beat buttons
         for i in 0..=4 {
@@ -1170,22 +1179,49 @@ pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
 pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     s.dt = dt;
     s.t += dt;
-    s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(16.0);
+    s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(64.0);
+
+    let random_palette = || match ThreadRng::default().gen_range(1..=8) {
+        1 => Palette::Solid(Rgbw::RED),
+        2 => Palette::Split(Rgbw::WHITE, Rgbw::RED),
+        3 => Palette::Solid(Rgbw::RED),
+        4 => Palette::Split(Rgbw::WHITE, Rgbw::RED),
+        5 => Palette::Solid(Rgbw::RED),
+        6 => Palette::Split(Rgbw::WHITE, Rgbw::RED),
+        7 | 8 | _ => Palette::Rainbow,
+    };
+    let random_mode = || match ThreadRng::default().gen_range(1..=6) {
+        1 => Mode::ChaseSmooth { pd: Pd(1, 1), beam: BeamPattern::WaveY },
+        2 => Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
+        3 => Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
+        4 => Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
+        5 => Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
+        6 | _ => Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
+    };
+    fn randomize<T: Copy + PartialEq>(value: &mut T, func: impl Fn() -> T) {
+        loop {
+            let v = func();
+            if v != *value {
+                *value = v;
+                break;
+            }
+        }
+    }
 
     if s.preset {
-        let phi = (s.phi(16, 1) * 4.0) as usize;
-        if phi % 4 == 0 {
+        let phi = (s.phi(64, 1) * 64.0) as usize;
+        if phi % 32 == 0 {
             if !s.preset_switched {
-                log::info!("SWITCH");
+                log::info!("switch mode+color");
+                randomize(&mut s.mode, random_mode);
+                randomize(&mut s.palette, random_palette);
                 s.preset_switched = true;
-                match ThreadRng::default().gen_range(1..=6) {
-                    1 => s.mode = Mode::ChaseSmooth { pd: Pd(1, 1), beam: BeamPattern::WaveY },
-                    2 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
-                    3 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::WaveY },
-                    4 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::UpDownWave },
-                    5 => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Whirl },
-                    6 | _ => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::Twisting },
-                }
+            }
+        } else if phi % 16 == 0 {
+            if !s.preset_switched {
+                log::info!("switch mode");
+                randomize(&mut s.mode, random_mode);
+                s.preset_switched = true;
             }
         } else {
             s.preset_switched = false;
@@ -1205,9 +1241,6 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         s.preset = !s.preset;
         log::info!("preset={}", s.preset);
     }
-    if s.preset {
-        return;
-    }
 
     match event {
         // Toggle debug mode
@@ -1216,7 +1249,8 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             pad.send(Output::Clear);
         }
         // Toggle laser
-        Input::Custom(true) => l.laser.on = !l.laser.on,
+        Input::Note(true) => s.palette = Palette::Rainbow,
+        // Input::Custom(true) => l.laser.on = !l.laser.on,
         // Brightness
         Input::Record(true) => s.brightness = 0.07,
         Input::Solo(true) => s.brightness = 0.1,
@@ -1231,6 +1265,39 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         Input::Down(true) => s.phi_mul = 0.5,
         Input::Left(true) => s.phi_mul = 1.0,
         _ => {}
+    }
+
+    if let Some((x, y)) = match event {
+        Input::Press(i, _) => Some((Coord::from(i).0, Coord::from(i).1)),
+        _ => None,
+    } {
+        match (x, y) {
+            // Beatmatch
+            (0, 7) => s.bpm_taps.push(s.t),
+            // Beatmatch apply
+            (7, 7) => match s.bpm_taps.len() {
+                // If no beats, just reset phase
+                0 => s.phi = 0.0,
+                1 => s.bpm_taps.clear(),
+                n => {
+                    // Calculate time difference between each consecutive tap
+                    let dts = s.bpm_taps.drain(..).tuple_windows().map(|(t0, t1)| t1 - t0);
+                    // Average out the difference
+                    let dt = dts.sum::<f64>() / (n as f64 - 1.0);
+                    // Calculate BPM
+                    let bpm = 60.0 / dt;
+
+                    s.phi = 0.0;
+                    s.bpm = bpm;
+                    log::info!("Calculated bpm={bpm:.2} from {n} samples");
+                }
+            },
+            _ => {}
+        }
+    }
+
+    if s.preset {
+        return;
     }
 
     let beat0 = |pd: Pd, s: &mut State, r: Range| match &mut s.beat {
@@ -1268,27 +1335,6 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         }
 
         match (x, y) {
-            // Beatmatch
-            (0, 7) => s.bpm_taps.push(s.t),
-            // Beatmatch apply
-            (7, 7) => match s.bpm_taps.len() {
-                // If no beats, just reset phase
-                0 => s.phi = 0.0,
-                1 => s.bpm_taps.clear(),
-                n => {
-                    // Calculate time difference between each consecutive tap
-                    let dts = s.bpm_taps.drain(..).tuple_windows().map(|(t0, t1)| t1 - t0);
-                    // Average out the difference
-                    let dt = dts.sum::<f64>() / (n as f64 - 1.0);
-                    // Calculate BPM
-                    let bpm = 60.0 / dt;
-
-                    s.phi = 0.0;
-                    s.bpm = bpm;
-                    log::info!("Calculated bpm={bpm:.2} from {n} samples");
-                }
-            },
-
             // Manual beats
             (0, 0) => beat0(Pd(4, 1), s, (1.0..0.0).into()),
             (0, 1) => beat0(Pd(2, 1), s, (1.0..0.0).into()),
@@ -1397,20 +1443,21 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             // Sidez
             (0, 6) => s.palette = Palette::Solid(Rgbw::WHITE),
             (7, 6) => s.palette = Palette::Solid(Rgbw::RGBW),
-            // Redz
+            // Primariez
             (1, 6) => s.palette = Palette::Solid(Rgbw::RED),
-            (2, 6) => s.palette = Palette::Split(Rgbw::RED, Rgbw::BLACK),
-            (3, 6) => s.palette = Palette::Split(Rgbw::BLACK, Rgbw::RED),
             (1, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::WHITE),
-            (2, 7) => s.palette = Palette::Split(Rgbw::WHITE, Rgbw::RED),
-            (3, 7) => s.palette = Palette::RedWhiteOsc,
-            // Greenz n Bluez
-            (4, 6) => s.palette = Palette::Solid(Rgbw::LIME),
-            (4, 7) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::WHITE),
-            (5, 6) => s.palette = Palette::Solid(Rgbw::BLUE),
-            (5, 7) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::BLUE),
-            (6, 6) => s.palette = Palette::Split(Rgbw::BLUE, Rgbw::WHITE),
-            (6, 7) => s.palette = Palette::Split(Rgbw::WHITE, Rgbw::BLUE),
+            (2, 6) => s.palette = Palette::Solid(Rgbw::LIME),
+            (2, 7) => s.palette = Palette::Split(Rgbw::LIME, Rgbw::WHITE),
+            (3, 6) => s.palette = Palette::Solid(Rgbw::BLUE),
+            (3, 7) => s.palette = Palette::Split(Rgbw::BLUE, Rgbw::WHITE),
+            // nBluez
+            (4, 6) => s.palette = Palette::Split(Rgbw::BLUE, Rgbw::LIME),
+            (4, 7) => s.palette = Palette::Split(Rgbw::RED, Rgbw::BLUE),
+            // Rainbowz
+            (5, 6) => s.palette = Palette::RedWhiteOsc,
+            (5, 7) => s.palette = Palette::BlueGreenOsc,
+            (6, 6) => s.palette = Palette::RgbOsc,
+            (6, 7) => s.palette = Palette::RainbowOsc,
 
             // hold pressure env
             // (6, 2) => s.beat0 = Beat::Fr(fr.in_exp()),

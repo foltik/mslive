@@ -6,7 +6,7 @@ use stagebridge::prelude::*;
 use crate::State;
 
 /// Pd
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Pd(pub usize, pub usize);
 impl Pd {
     pub fn fr(&self) -> f64 {

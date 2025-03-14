@@ -1,4 +1,5 @@
 use anyhow::Result;
+use stagebridge::dmx::device::beam_rgbw_90w::BigBeam;
 use std::net::IpAddr;
 
 use stagebridge::color::Rgbw;
@@ -20,7 +21,7 @@ pub struct Lights {
     addr: IpAddr,
 
     pub pars: [Par; 10],
-    pub beams: [Beam; 4],
+    pub beams: [BigBeam; 4],
     pub bars: [Bar; 2],
     pub spiders: [Spider; 2],
     pub strobe: Strobe,
@@ -51,27 +52,39 @@ impl Lights {
     }
 
     pub fn send(&mut self) {
-        let mut dmx = [0u8; 205];
+        let mut dmx = [0u8; 257];
 
         for (i, par) in self.pars.iter().enumerate() {
             par.encode(&mut dmx[1 + 8 * i..]);
         }
         for (i, beam) in self.beams.iter().enumerate() {
-            let beam = Beam { alpha: beam.alpha * 0.5, ..beam.clone() };
+            let beam = Beam {
+                pitch: beam.pitch,
+                yaw: beam.yaw,
+                speed: beam.speed,
+                color: beam.color,
+                alpha: beam.alpha,
+                ..Default::default()
+            };
             beam.encode(&mut dmx[81 + 15 * i..]);
         }
         for (i, bar) in self.bars.iter().enumerate() {
             if bar.color.0 == bar.color.1 && bar.color.1 == bar.color.2 {
                 Bar { alpha: 0.0, color: Rgb::BLACK }.encode(&mut dmx[149 + 7 * i..]);
             } else {
+                // Bar { alpha: 1.0, color: Rgb::WHITE }.encode(&mut dmx[149 + 7 * i..]);
                 bar.encode(&mut dmx[149 + 7 * i..]);
             }
         }
+        self.strobe.encode(&mut dmx[142..]);
+        self.laser.encode(&mut dmx[164..]);
         for (i, spider) in self.spiders.iter().enumerate() {
             spider.encode(&mut dmx[175 + 15 * i..]);
         }
-        self.strobe.encode(&mut dmx[142..]);
-        self.laser.encode(&mut dmx[164..]);
+        for (i, beam) in self.beams.iter().enumerate() {
+            let beam = BigBeam { alpha: beam.alpha * 0.5, ..beam.clone() };
+            beam.encode(&mut dmx[205 + 13 * i..]);
+        }
 
         self.e131.send(&self.addr, &dmx);
     }
@@ -106,7 +119,7 @@ impl Lights {
     pub fn for_each_par(&mut self, f: impl FnMut(&mut Par, usize, f64)) {
         Self::for_each(&mut self.pars, f);
     }
-    pub fn for_each_beam(&mut self, f: impl FnMut(&mut Beam, usize, f64)) {
+    pub fn for_each_beam(&mut self, f: impl FnMut(&mut BigBeam, usize, f64)) {
         Self::for_each(&mut self.beams, f);
     }
     pub fn for_each_bar(&mut self, f: impl FnMut(&mut Bar, usize, f64)) {
