@@ -69,12 +69,7 @@ impl Lights {
             beam.encode(&mut dmx[81 + 15 * i..]);
         }
         for (i, bar) in self.bars.iter().enumerate() {
-            if bar.color.0 == bar.color.1 && bar.color.1 == bar.color.2 {
-                Bar { alpha: 0.0, color: Rgb::BLACK }.encode(&mut dmx[149 + 7 * i..]);
-            } else {
-                // Bar { alpha: 1.0, color: Rgb::WHITE }.encode(&mut dmx[149 + 7 * i..]);
-                bar.encode(&mut dmx[149 + 7 * i..]);
-            }
+            bar.encode(&mut dmx[149 + 7 * i..]);
         }
         self.strobe.encode(&mut dmx[142..]);
         self.laser.encode(&mut dmx[164..]);
