@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use clap::{ArgAction, Parser};
+use egui::Vec2;
 use itertools::Itertools;
 use rand::seq::SliceRandom;
 use stagebridge::color::{Rgb, Rgbw};
@@ -80,7 +81,12 @@ fn main() -> Result<()> {
 
     // Start the main loop, managed by the OS's windowing system.
     let mut last = Instant::now();
-    eframe::run_simple_native("mslive", Default::default(), move |ctx, _frame| {
+    let opts = eframe::NativeOptions {
+        always_on_top: true,
+        initial_window_size: Some(Vec2 { x: 640.0, y: 800.0 }),
+        ..Default::default()
+    };
+    eframe::run_simple_native("mslive", opts, move |ctx, _frame| {
         let elapsed = last.elapsed();
         last = Instant::now();
 
@@ -108,7 +114,7 @@ fn main() -> Result<()> {
             logic::tick(elapsed.as_secs_f64(), s, l);
 
             logic::render_lights(s, l);
-            logic::render_pad(s, &mut pad);
+            logic::render_pad(s, l, &mut pad);
             logic::render_ctrl(s, &mut ctrl);
         }
 

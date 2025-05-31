@@ -65,7 +65,7 @@ impl<T> Hold<T> {
     pub fn value(&self) -> Option<&T> {
         match self {
             Hold::Off => None,
-            Hold::Held { x, y, val } => Some(&val),
+            Hold::Held { x, y, val } => Some(val),
         }
     }
 }
