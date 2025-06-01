@@ -39,8 +39,8 @@ impl Lights {
         self.rgbw = Default::default();
     }
 
-    pub fn send(&mut self, chan: usize) {
-        let mut dmx = [0u8; 120];
+    pub fn send(&mut self) {
+        let mut dmx = [0u8; 110];
 
         // RGBW bars
         macro_rules! rgbw {
@@ -52,19 +52,20 @@ impl Lights {
             };
         }
         rgbw!(self, dmx, 1, 0);
-        rgbw!(self, dmx, 5, 1);
-        rgbw!(self, dmx, 9, 2);
-        rgbw!(self, dmx, 13, 3);
-        rgbw!(self, dmx, 21, 4);
-        rgbw!(self, dmx, 25, 5);
-        rgbw!(self, dmx, 37, 6);
-        rgbw!(self, dmx, 49, 7);
-        rgbw!(self, dmx, 53, 8);
+        log::info!("{:?}", &dmx[0..4]);
+        // rgbw!(self, dmx, 5, 1);
+        // rgbw!(self, dmx, 9, 2);
+        // rgbw!(self, dmx, 13, 3);
+        // rgbw!(self, dmx, 21, 4);
+        // rgbw!(self, dmx, 25, 5);
+        // rgbw!(self, dmx, 37, 6);
+        // rgbw!(self, dmx, 49, 7);
+        // rgbw!(self, dmx, 53, 8);
 
         // Dimmer packs
-        for i in 0..8 {
-            dmx[100 + i] = self.dimmer[i].byte();
-        }
+        // for i in 0..8 {
+        //     dmx[100 + i] = self.dimmer[i].byte();
+        // }
 
         // self.e131.send(&self.addr, &dmx);
     }

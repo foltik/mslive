@@ -24,20 +24,11 @@ use crate::utils::{Hold, Pd};
 
 ///////////////////////// TODO /////////////////////////
 
-// * Beat buttons
-// * Strobe variations
-// * Autobeat variations
-// * Hold variations
-//    * strobing beams-only, sweeping upwards
-// * Better colors
-// * Brightness adjustments
-
 ///////////////////////// IDEAS /////////////////////////
-
-// * Random beam strobe
 
 ///////////////////////// STATE /////////////////////////
 
+#[rustfmt::skip]
 #[derive(Default)]
 pub struct State {
     /// Time since the last `tick()` in seconds
@@ -56,31 +47,30 @@ pub struct State {
     /// Bpm multiplier, e.g. 0.5 for half-time, 2.0 for double-time.
     pub phi_mul: f64,
 
-    /// Lighting mode
+    /* Global Settings */
+    /// Control mode
     pub mode: Mode,
-    /// Global brightness modifier
+    /// House lights
+    pub house: f64,
+    /// Global alpha
     pub brightness: f64,
-
-    /// Pattern speed modifier
-    pub speed: f64,
-
-    /// Mode::Manual
-    pub manual: [f64; 9],
+    /// Global speed modifiers
+    pub speed_coarse: f64,
+    pub speed_fine: f64,
+    /// Global decay modifier
     pub decay: f64,
-    /// Mode::Random
-    pub rand_step: usize,
-    pub rand_idx: usize,
+    /// Generic modifiers depending on patterns
+    pub sliders: [f64; 8],
+    pub knobs: [f64; 8],
 
-    pub color: Rgbw,
+    /* Patterns */
+    pub color: Color,
+    pub rgbw_pat: RgbwPattern,
+    pub cage_pat: CagePattern,
+    pub dimmer_pat: DimmerPattern,
 
-    // Test paramters
-    pub test0: f64,
-    pub test1: f64,
-    pub test2: f64,
-    pub test3: f64,
-    pub test4: f64,
-
-    pub chan: u8,
+    /* Jam Rgbw */
+    /* Jam Dimmer */
 }
 
 impl State {
@@ -89,7 +79,7 @@ impl State {
             brightness: 1.0,
             bpm: 120.0,
             phi_mul: 1.0,
-            speed: 1.0,
+            speed_coarse: 1.0,
             decay: 0.5,
             ..Default::default()
         }
@@ -111,27 +101,95 @@ impl State {
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Mode {
-    /// All off
+    #[default]
+    Patterns,
+    JamRgbw,
+    JamDimmers,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum RgbwPattern {
     #[default]
     Off,
-    /// All on, solid color
-    On,
-    /// Manual beat presses
-    Manual,
-    /// Sequentially iterating through lights one at a time
     Chase,
-    /// Random switching
+    ChaseSine,
+    ChaseRandom,
+    Strobe,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum CagePattern {
+    #[default]
+    ChaseSine,
+    ChaseRandom,
+    Strobe,
+    SyncBounce,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum DimmerPattern {
+    #[default]
+    Off,
+    Manual,
+    Chase,
     Random,
-    /// Spin in a circle
     Circle,
-    /// Spiral pattern
-    Spiral,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum Color {
+    #[default]
+    House,
+
+    White,
+    Red,
+    Green,
+    Blue,
+    Purple,
+
+    RedWhite,
+    GreenWhite,
+    BlueWhite,
+
+    Rainbow,
+    ManualHue,
+    ManualRgbw,
 }
 
 ///////////////////////// LIGHTS /////////////////////////
 
 pub fn render_lights(s: &mut State, l: &mut Lights) {
-    l.send(s.chan.into());
+    for i in 0..9 {
+        l.rgbw[i] = Rgbw::ORANGE * s.t.fsin(8.0) * 0.5;
+    }
+
+    l.send();
+    return;
+
+    if s.house > 0.0 {
+        for i in 0..9 {
+            l.rgbw[i] = Rgbw(0.39, 0.19, 0.0, 0.0) * s.house;
+        }
+        return;
+    }
+
+    l.reset();
+
+    /* Rgbw */
+    match s.mode {
+        Mode::JamRgbw => {}
+        Mode::Patterns => {}
+        _ => {}
+    }
+
+    /* Dimmers */
+    match s.mode {
+        Mode::JamDimmers => {}
+        Mode::Patterns => {}
+        _ => {}
+    }
+
+    l.send();
 }
 
 ///////////////////////// PAD /////////////////////////
@@ -172,15 +230,15 @@ pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
     use crate::logic::Mode as Mode;
     let mut set = |i, b| ctrl.send(Output::Control(i, Color::Red, if b { Brightness::High } else { Brightness::Off }));
 
-    match s.mode {
-        Mode::Off    => set(0, true),
-        Mode::On     => set(1, true),
-        Mode::Manual => set(2, true),
-        Mode::Chase  => set(3, true),
-        Mode::Random => set(4, true),
-        Mode::Circle => set(5, true),
-        Mode::Spiral => set(6, true),
-    }
+    // match s.mode {
+    //     Mode::Off    => set(0, true),
+    //     Mode::On     => set(1, true),
+    //     Mode::Manual => set(2, true),
+    //     Mode::Chase  => set(3, true),
+    //     Mode::Random => set(4, true),
+    //     Mode::Circle => set(5, true),
+    //     Mode::Spiral => set(6, true),
+    // }
 }
 
 ///////////////////////// TICK /////////////////////////
@@ -188,8 +246,14 @@ pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
 pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     s.dt = dt;
     s.t0 += dt;
-    s.t += dt * s.speed;
+    s.t += dt * s.speed_coarse;
     s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(64.0);
+
+    // match s.mode {
+    //     Mode::Patterns => {}
+    //     Mode::JamRgbw => {}
+    //     Mode::JamDimmers => {}
+    // }
 
     // let target = (s.t).floor() as usize % 9;
     // log::info!("t={} target={target}", s.t);
@@ -216,10 +280,6 @@ pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     //     //     // };
     //     l.rgbw[i] = Rgbw::WHITE;
     // }
-
-    for i in 0..9 {
-        l.rgbw[i] = Rgbw::ORANGE;
-    }
 
     // // Apply manual beats
     // for i in 0..9 {
@@ -320,32 +380,7 @@ pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
 
 pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
     use launchpad_x::{types::*, *};
-    // log::debug!("pad: {event:?}");
-
-    // match event {
-    //     // Toggle debug mode
-    //     Input::Capture(true) => {
-    //         s.debug = !s.debug;
-    //         pad.send(Output::Clear);
-    //     }
-    //     // Toggle laser
-    //     Input::Note(true) => s.colors = Colors::Rainbow,
-    //     // Input::Custom(true) => l.laser.on = !l.laser.on,
-    //     // Brightness
-    //     Input::Record(true) => s.brightness = 0.07,
-    //     Input::Solo(true) => s.brightness = 0.1,
-    //     Input::Mute(true) => s.brightness = 0.125,
-    //     Input::Stop(true) => s.brightness = 0.3,
-    //     Input::B(true) => s.brightness = 0.4,
-    //     Input::A(true) => s.brightness = 0.6,
-    //     Input::Pan(true) => s.brightness = 0.8,
-    //     Input::Volume(true) => s.brightness = 1.0,
-    //     // half/double/normal time
-    //     Input::Up(true) => s.phi_mul = 2.0,
-    //     Input::Down(true) => s.phi_mul = 0.5,
-    //     Input::Left(true) => s.phi_mul = 1.0,
-    //     _ => {}
-    // }
+    log::debug!("pad: {event:?}");
 
     if let Some((x, y)) = match event {
         Input::Press(i, _) => Some((Coord::from(i).0, Coord::from(i).1)),
@@ -393,14 +428,10 @@ pub fn on_ctrl(s: &mut State, l: &mut Lights, ctrl: &mut Midi<LaunchControlXL>, 
     log::debug!("ctrl: {input:?}");
 
     match input {
-        Input::Focus(0, true) => {
-            s.chan -= 1;
-            log::info!("chan={}", s.chan);
-        }
-        Input::Focus(1, true) => {
-            s.chan += 1;
-            log::info!("chan={}", s.chan);
-        }
+        Input::SendA(0, fr) => s.brightness = (fr * 0.5) + 0.5,
+        Input::SendA(1, fr) => s.speed_coarse = (fr * 0.5) + 0.5,
+        Input::SendA(2, fr) => s.speed_fine = (fr * 0.5) + 0.5,
+        Input::SendA(7, fr) => s.house = (fr * 0.5) + 0.5,
 
         // Input::Slider(0, fr) => s.brightness = fr,
         // Input::Slider(1, fr) => s.speed = fr * 60.0,
