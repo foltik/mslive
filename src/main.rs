@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use clap::{ArgAction, Parser};
+use eframe::NativeOptions;
 use itertools::Itertools;
 use rand::seq::SliceRandom;
 use stagebridge::color::{Rgb, Rgbw};
@@ -80,7 +81,7 @@ fn main() -> Result<()> {
 
     // Start the main loop, managed by the OS's windowing system.
     let mut last = Instant::now();
-    eframe::run_simple_native("mslive", Default::default(), move |ctx, _frame| {
+    eframe::run_simple_native("mslive", NativeOptions { always_on_top: true, ..Default::default() }, move |ctx, _frame| {
         let elapsed = last.elapsed();
         last = Instant::now();
 
