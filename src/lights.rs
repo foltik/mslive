@@ -1,20 +1,9 @@
 use anyhow::Result;
-use stagebridge::dmx::device::beam_rgbw_90w::BigBeam;
 use std::net::IpAddr;
 
 use stagebridge::color::Rgbw;
-use stagebridge::dmx::device::bar_rgb_18w::Bar;
-use stagebridge::dmx::device::beam_rgbw_60w::{Beam, BeamRing};
-use stagebridge::dmx::device::laser_scan_30w::{Laser, LaserColor};
-use stagebridge::dmx::device::par_rgbw_12x3w::Par;
-use stagebridge::dmx::device::spider_rgbw_8x10w::Spider;
-use stagebridge::dmx::device::strobe_rgb_35w::Strobe;
-use stagebridge::dmx::Device;
 use stagebridge::e131::E131;
 use stagebridge::prelude::*;
-
-use crate::utils::Pd;
-use crate::State;
 
 pub struct Lights {
     e131: E131,
@@ -67,21 +56,5 @@ impl Lights {
         }
 
         self.e131.send(&self.addr, &dmx);
-    }
-}
-
-impl Lights {
-    fn for_each<T>(slice: &mut [T], mut f: impl FnMut(&mut T, usize, f64)) {
-        let n = slice.len();
-        slice.iter_mut().enumerate().for_each(|(i, t)| f(t, i, i as f64 / n as f64));
-    }
-
-    // Mutably iterate through the lights, with index and fr (from 0 to 1) parameters.
-
-    pub fn for_each_dimmer(&mut self, f: impl FnMut(&mut f64, usize, f64)) {
-        Self::for_each(&mut self.dimmer, f);
-    }
-    pub fn for_reach_rgbw(&mut self, f: impl FnMut(&mut Rgbw, usize, f64)) {
-        Self::for_each(&mut self.rgbw, f);
     }
 }

@@ -1,46 +1,63 @@
-#![allow(unused)]
-#![allow(clippy::single_match)]
-#![allow(clippy::match_single_binding)]
-#![allow(clippy::needless_pass_by_ref_mut)]
-#![feature(stmt_expr_attributes)]
-
 use anyhow::Result;
-use clap::{ArgAction, Parser};
-use egui::Vec2;
-use itertools::Itertools;
-use rand::seq::SliceRandom;
-use stagebridge::color::{Rgb, Rgbw};
-use stagebridge::dmx::device::laser_scan_30w::{LaserColor, LaserPattern};
-use std::net::UdpSocket;
+use clap::Parser;
 use std::time::Instant;
-use std::{thread, time::Duration};
 
-use stagebridge::e131::E131;
 use stagebridge::midi::device::{
     launch_control_xl::{self, LaunchControlXL},
     launchpad_x::{self, LaunchpadX},
 };
 use stagebridge::midi::Midi;
-use stagebridge::prelude::*;
 
 mod gui;
 mod lights;
 mod logic;
-mod utils;
 
 use lights::Lights;
-use logic::State;
+use logic::Generator;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Log verbosity. Add more v's for more verbosity.
-    #[arg(short, action = ArgAction::Count)]
+    #[arg(short, action = clap::ArgAction::Count)]
     verbose: u8,
 }
 
+pub struct State {
+    fx0: Generator,
+    fx1: Generator,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self { fx0: Generator::new(0), fx1: Generator::new(4) }
+    }
+}
+
+impl State {
+    pub fn tick(&mut self, dt: f64) {
+        self.fx0.tick(dt);
+        self.fx1.tick(dt);
+    }
+    pub fn render(&self, lights: &mut Lights) {
+        self.fx0.render(lights);
+        self.fx1.render(lights);
+    }
+    pub fn input_pad(&mut self, event: launchpad_x::Input) {
+        self.fx0.handle_pad(event);
+        self.fx1.handle_pad(event);
+    }
+    pub fn input_ctrl(&mut self, event: launch_control_xl::Input) {
+        self.fx0.handle_ctrl(event);
+        self.fx1.handle_ctrl(event);
+    }
+    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
+        self.fx0.render_pad(pad);
+        self.fx1.render_pad(pad);
+    }
+}
+
 fn main() -> Result<()> {
-    // Set up colorful logging for `log::` calls.
     let args = Args::parse();
     let level = match args.verbose {
         0 => log::LevelFilter::Info,
@@ -55,75 +72,48 @@ fn main() -> Result<()> {
         .parse_default_env()
         .init();
 
-    Midi::<LaunchpadX>::list();
-
-    // Initialize prodjlink BPM rx socket
-    let prodjlink = UdpSocket::bind("0.0.0.0:42069")?;
-    prodjlink.set_nonblocking(true);
-    let mut bpm = [0u8; 4];
-    log::info!("Listening to prodjlink at {}", prodjlink.local_addr()?);
-
     // Initialize input devices
-    // let mut pad = Midi::new("WIDI Uhost", LaunchpadX::default());
+    Midi::<LaunchpadX>::list()?;
     let mut pad = Midi::new("Launchpad X LPX MIDI", LaunchpadX::default());
     let mut ctrl = Midi::new("Launch Control XL", LaunchControlXL);
     {
         use launchpad_x::{types::*, *};
         pad.send(Output::Pressure(Pressure::Off, PressureCurve::Medium));
-        pad.send(Output::Brightness(0.0));
+        pad.send(Output::Brightness(1.0));
     }
 
-    // Connect to our lighting rig's Arduino DMX adapter.
+    // Connect to our DMX bridge
     let mut lights = Lights::new("10.16.4.1".parse()?)?;
 
-    // Initialize main state
-    let mut state = State::new();
+    let mut state = State::default();
 
     // Start the main loop, managed by the OS's windowing system.
     let mut last = Instant::now();
     let opts = eframe::NativeOptions {
         always_on_top: true,
-        initial_window_size: Some(Vec2 { x: 640.0, y: 800.0 }),
+        initial_window_size: Some(egui::Vec2 { x: 640.0, y: 800.0 }),
         ..Default::default()
     };
-    eframe::run_simple_native("mslive", opts, move |ctx, _frame| {
-        let elapsed = last.elapsed();
+    eframe::run_simple_native("lsd", opts, move |ctx, _frame| {
+        let dt = last.elapsed().as_secs_f64();
         last = Instant::now();
 
-        // Check for prodjlink packets
-        match prodjlink.recv_from(&mut bpm) {
-            Ok(_) => {
-                let bpm = f32::from_le_bytes(bpm) as f64;
-                log::info!("prodjlink bpm={bpm}");
-                state.bpm = bpm;
-            }
-            _ => {}
+        for input in ctrl.recv() {
+            state.input_ctrl(input);
+        }
+        for input in pad.recv() {
+            state.input_pad(input);
         }
 
-        let (s, l) = (&mut state, &mut lights);
+        state.tick(dt);
+        state.output_pad(&mut pad);
 
-        // Update logic
-        {
-            for input in ctrl.recv() {
-                logic::on_ctrl(s, l, &mut ctrl, input);
-            }
-            for input in pad.recv() {
-                logic::on_pad(s, l, &mut pad, input);
-            }
+        lights.reset();
+        state.render(&mut lights);
 
-            logic::tick(elapsed.as_secs_f64(), s, l);
-
-            logic::render_lights(s, l);
-            logic::render_pad(s, l, &mut pad);
-            logic::render_ctrl(s, &mut ctrl);
-        }
-
-        // Always render the GUI each frame
-        gui::render_gui(s, l, ctx);
-
-        // Immediately request a repaint again from the OS to render at maximum speed.
+        gui::render(&lights, ctx);
         ctx.request_repaint();
-    });
+    })?;
 
     Ok(())
 }
