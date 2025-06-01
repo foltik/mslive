@@ -20,7 +20,7 @@ pub struct Lights {
     e131: E131,
     addr: IpAddr,
 
-    pub dimmer: [f64; 8],
+    pub dimmer: [f64; 9],
     pub rgbw: [Rgbw; 9],
 }
 
@@ -52,22 +52,21 @@ impl Lights {
             };
         }
         rgbw!(self, dmx, 1, 0);
-        log::info!("{:?}", &dmx[0..4]);
-        // rgbw!(self, dmx, 5, 1);
-        // rgbw!(self, dmx, 9, 2);
-        // rgbw!(self, dmx, 13, 3);
-        // rgbw!(self, dmx, 21, 4);
-        // rgbw!(self, dmx, 25, 5);
-        // rgbw!(self, dmx, 37, 6);
-        // rgbw!(self, dmx, 49, 7);
-        // rgbw!(self, dmx, 53, 8);
+        rgbw!(self, dmx, 5, 1);
+        rgbw!(self, dmx, 9, 2);
+        rgbw!(self, dmx, 13, 3);
+        rgbw!(self, dmx, 21, 4);
+        rgbw!(self, dmx, 25, 5);
+        rgbw!(self, dmx, 37, 6);
+        rgbw!(self, dmx, 49, 7);
+        rgbw!(self, dmx, 53, 8);
 
         // Dimmer packs
-        // for i in 0..8 {
-        //     dmx[100 + i] = self.dimmer[i].byte();
-        // }
+        for i in 0..9 {
+            dmx[100 + i] = self.dimmer[i].byte();
+        }
 
-        // self.e131.send(&self.addr, &dmx);
+        self.e131.send(&self.addr, &dmx);
     }
 }
 

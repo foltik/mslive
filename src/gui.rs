@@ -48,6 +48,17 @@ fn draw_inner(s: &State, l: &Lights, p: &egui::Painter, w0: f64, h0: f64) {
     }
 
     // dimmers
+    for x in 0..2 {
+        for y in 0..4 {
+            circle(
+                p,
+                Rgbw::WHITE * l.dimmer[(y * 2) + x],
+                x0 + (w * 0.4) + (40.0 * y as f64),
+                y0 + (h * 0.8) + (40.0 * x as f64),
+                10.0,
+            );
+        }
+    }
     // circle(p, l.pars[0].color, x0, y0 + dy, 10.0);
     // circle(p, l.pars[9].color, x0 + w, y0 + dy, 10.0);
 }

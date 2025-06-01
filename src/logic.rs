@@ -54,33 +54,40 @@ pub struct State {
     pub house: f64,
     /// Global alpha
     pub brightness: f64,
+    /// Brightness is mapped onto this range
+    pub range: f64,
+    pub dimmer_brightness: f64,
     /// Global speed modifiers
     pub speed_coarse: f64,
     pub speed_fine: f64,
-    /// Global decay modifier
-    pub decay: f64,
+    /// Global duty cycle modifications
+    pub duty0: f64,
+    pub duty1: f64,
+    pub duty2: f64,
     /// Generic modifiers depending on patterns
     pub sliders: [f64; 8],
     pub knobs: [f64; 8],
 
     /* Patterns */
-    pub color: Color,
-    pub rgbw_pat: RgbwPattern,
-    pub cage_pat: CagePattern,
-    pub dimmer_pat: DimmerPattern,
+    pub color0: Color,
+    pub color1: Color,
+    pub pattern0: Pattern,
+    pub pattern1: Pattern,
 
-    /* Jam Rgbw */
-    /* Jam Dimmer */
+    /* Jam */
+    pub jam_rgbw0: [f64; 9],
+    pub jam_rgbw1: [f64; 9],
+    pub jam_dimmer: [f64; 9],
 }
 
 impl State {
     pub fn new() -> Self {
         Self {
             brightness: 1.0,
+            dimmer_brightness: 1.0,
             bpm: 120.0,
             phi_mul: 1.0,
             speed_coarse: 1.0,
-            decay: 0.5,
             ..Default::default()
         }
     }
@@ -102,91 +109,96 @@ impl State {
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Mode {
     #[default]
-    Patterns,
-    JamRgbw,
-    JamDimmers,
+    Jam,
+    Todo,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum RgbwPattern {
+pub enum Pattern {
     #[default]
-    Off,
-    Chase,
-    ChaseSine,
-    ChaseRandom,
-    Strobe,
+    Unit,
+    Sine,
+    Ramp,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum CagePattern {
-    #[default]
-    ChaseSine,
-    ChaseRandom,
-    Strobe,
-    SyncBounce,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum DimmerPattern {
-    #[default]
-    Off,
-    Manual,
-    Chase,
-    Random,
-    Circle,
+impl Pattern {
+    pub fn apply(self, s: &State, duty: f64) -> f64 {
+        match self {
+            Pattern::Unit => 1.0,
+            Pattern::Sine => s.t.fsin(duty),
+            Pattern::Ramp => s.t.ramp(duty),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Color {
+    /// House lights color
     #[default]
     House,
 
+    // Pure colors
     White,
     Red,
+    Orange,
+    Yellow,
     Green,
+    Pea,
     Blue,
+    Cyan,
     Purple,
+    Magenta,
+    Mint,
 
+    // Split pure plus white
     RedWhite,
     GreenWhite,
     BlueWhite,
 
+    // Periodic sine hue shift between two colors
+    RedPurpleShift,
+    GreenYellowShift,
+    BlueGreenShift,
+
+    // Rotating hsv
     Rainbow,
-    ManualHue,
-    ManualRgbw,
+    // ManualHue,
+    // ManualRgbw,
 }
 
 ///////////////////////// LIGHTS /////////////////////////
 
 pub fn render_lights(s: &mut State, l: &mut Lights) {
-    for i in 0..9 {
-        l.rgbw[i] = Rgbw::ORANGE * s.t.fsin(8.0) * 0.5;
-    }
-
-    l.send();
-    return;
-
+    /* House lights override */
     if s.house > 0.0 {
         for i in 0..9 {
-            l.rgbw[i] = Rgbw(0.39, 0.19, 0.0, 0.0) * s.house;
+            l.rgbw[i] = Color::House.render(s) * s.house;
         }
+        l.send();
         return;
     }
 
-    l.reset();
-
-    /* Rgbw */
     match s.mode {
-        Mode::JamRgbw => {}
-        Mode::Patterns => {}
-        _ => {}
-    }
+        Mode::Jam => {
+            let color0 = s.color0.render(s);
+            let color1 = s.color1.render(s);
+            for i in 0..9 {
+                let fr0 = s.jam_rgbw0[i].max(0.0);
+                let fr1 = s.jam_rgbw1[i].max(0.0);
 
-    /* Dimmers */
-    match s.mode {
-        Mode::JamDimmers => {}
-        Mode::Patterns => {}
-        _ => {}
+                if fr0 > 0.0 {
+                    l.rgbw[i] = color0 * fr0 * s.brightness * s.range;
+                } else if fr1 > 0.0 {
+                    l.rgbw[i] = color1 * fr1 * s.brightness * s.range;
+                }
+            }
+            for i in 0..9 {
+                l.dimmer[i] = s.jam_dimmer[i].max(0.0) * s.dimmer_brightness;
+            }
+        }
+        Mode::Todo => {
+            // TODO
+        }
     }
 
     l.send();
@@ -204,20 +216,85 @@ pub fn render_pad(s: &mut State, l: &Lights, pad: &mut Midi<LaunchpadX>) {
     let rgb = |Rgb(r, g, b): Rgb| Color::Rgb(r, g, b);
     let mut set = |x, y, color: Rgb| batch.push((Coord(x, y).into(), rgb(color)));
 
-    // match s.mode {
-    //     _ => {
-    //         for (n, &fr) in l.dimmers.iter().enumerate() {
-    //             let x = n % 3;
-    //             let y = n / 3;
+    match s.mode {
+        Mode::Todo => {
+            // Beatmatch buttons
+            set(0, 7, Rgb::VIOLET);
+            set(7, 7, Rgb::VIOLET);
+        }
+        Mode::Jam => {
+            use crate::logic::Color;
 
-    //             for i in (3 * x)..(3 * (x + 1)) {
-    //                 for j in (3 * y)..(3 * (y + 1)) {
-    //                     set(i as i8, j as i8, Rgb::WHITE * fr);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+            for x in 0..3 {
+                for y in 0..3 {
+                    let n = (y * 3) + x;
+                    set(x, y, (Rgbw::WHITE * s.jam_rgbw0[n as usize]).into());
+                    set(x + 5, y, (Rgbw::WHITE * s.jam_rgbw1[n as usize]).into());
+                }
+            }
+
+            for i in 0..3 {
+                set(3, i, s.color0.render(s).into());
+                set(4, i, s.color1.render(s).into());
+            }
+
+            set(0, 8, Rgb::WHITE * if s.pattern0 == Pattern::Unit { 1.0 } else { 0.0 });
+            set(1, 8, Rgb::WHITE * if s.pattern0 == Pattern::Sine { 1.0 } else { 0.0 });
+            set(2, 8, Rgb::WHITE * if s.pattern0 == Pattern::Ramp { 1.0 } else { 0.0 });
+            set(5, 8, Rgb::WHITE * if s.pattern1 == Pattern::Unit { 1.0 } else { 0.0 });
+            set(6, 8, Rgb::WHITE * if s.pattern1 == Pattern::Sine { 1.0 } else { 0.0 });
+            set(7, 8, Rgb::WHITE * if s.pattern1 == Pattern::Ramp { 1.0 } else { 0.0 });
+
+            set(0, 7, Color::RedPurpleShift.render(s).into());
+            set(1, 7, Color::GreenYellowShift.render(s).into());
+            set(2, 7, Color::BlueGreenShift.render(s).into());
+
+            set(0, 6, Color::Red.render(s).into());
+            set(1, 6, Color::Orange.render(s).into());
+            set(2, 6, Color::Yellow.render(s).into());
+
+            set(0, 5, Color::Green.render(s).into());
+            set(1, 5, Color::Mint.render(s).into());
+            set(2, 5, Color::Cyan.render(s).into());
+
+            set(0, 4, Color::Blue.render(s).into());
+            set(1, 4, Color::Purple.render(s).into());
+            set(2, 4, Color::Magenta.render(s).into());
+
+            set(0, 3, Color::White.render(s).into());
+            set(1, 3, Color::Rainbow.render(s).into());
+
+            /**/
+
+            set(5, 7, Color::RedPurpleShift.render(s).into());
+            set(6, 7, Color::GreenYellowShift.render(s).into());
+            set(7, 7, Color::BlueGreenShift.render(s).into());
+
+            set(5, 6, Color::Red.render(s).into());
+            set(6, 6, Color::Orange.render(s).into());
+            set(7, 6, Color::Yellow.render(s).into());
+
+            set(5, 5, Color::Green.render(s).into());
+            set(6, 5, Color::Mint.render(s).into());
+            set(7, 5, Color::Cyan.render(s).into());
+
+            set(5, 4, Color::Blue.render(s).into());
+            set(6, 4, Color::Purple.render(s).into());
+            set(7, 4, Color::Magenta.render(s).into());
+
+            set(5, 3, Color::White.render(s).into());
+            set(6, 3, Color::Rainbow.render(s).into());
+
+            set(3, 3, (Rgbw::WHITE * s.jam_dimmer[0]).into());
+            set(4, 3, (Rgbw::WHITE * s.jam_dimmer[1]).into());
+            set(3, 4, (Rgbw::WHITE * s.jam_dimmer[2]).into());
+            set(4, 4, (Rgbw::WHITE * s.jam_dimmer[3]).into());
+            set(3, 5, (Rgbw::WHITE * s.jam_dimmer[4]).into());
+            set(4, 5, (Rgbw::WHITE * s.jam_dimmer[5]).into());
+            set(3, 6, (Rgbw::WHITE * s.jam_dimmer[6]).into());
+            set(4, 6, (Rgbw::WHITE * s.jam_dimmer[7]).into());
+        }
+    }
 
     pad.send(Output::Batch(batch));
 }
@@ -229,16 +306,6 @@ pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
     use launch_control_xl::{types::*, *};
     use crate::logic::Mode as Mode;
     let mut set = |i, b| ctrl.send(Output::Control(i, Color::Red, if b { Brightness::High } else { Brightness::Off }));
-
-    // match s.mode {
-    //     Mode::Off    => set(0, true),
-    //     Mode::On     => set(1, true),
-    //     Mode::Manual => set(2, true),
-    //     Mode::Chase  => set(3, true),
-    //     Mode::Random => set(4, true),
-    //     Mode::Circle => set(5, true),
-    //     Mode::Spiral => set(6, true),
-    // }
 }
 
 ///////////////////////// TICK /////////////////////////
@@ -249,171 +316,134 @@ pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     s.t += dt * s.speed_coarse;
     s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(64.0);
 
-    // match s.mode {
-    //     Mode::Patterns => {}
-    //     Mode::JamRgbw => {}
-    //     Mode::JamDimmers => {}
-    // }
-
-    // let target = (s.t).floor() as usize % 9;
-    // log::info!("t={} target={target}", s.t);
-    // for i in 0..9 {
-    //     if i == target {
-    //         // l.rgbw[i] = Rgb::hsv(s.phi(16, 1), 1.0, 1.0).into();
-    //         l.rgbw[i] = Rgbw::BLUE * s.brightness;
-    //     } else {
-    //         l.rgbw[i] = Rgbw::BLACK;
-    //     }
-    // }
-
-    // l.rgbw[0] = Rgbw(0.0, 0.0, 0.0, 1.0);
-    // l.rgbw[0] = Rgb::hsv(s.phi(16, 1), 1.0, 1.0).into();
-    // let target = (s.t).floor() as usize % 4;
-    // for i in 0..9 {
-    //     //     // log::info!("target={target}");
-    //     //     // l.rgbw[i] = match target {
-    //     //     //     0 => Rgbw::RED,
-    //     //     //     1 => Rgbw::LIME,
-    //     //     //     2 => Rgbw::BLUE,
-    //     //     //     3 => Rgbw::WHITE,
-    //     //     //     _ => unreachable!(),
-    //     //     // };
-    //     l.rgbw[i] = Rgbw::WHITE;
-    // }
-
-    // // Apply manual beats
-    // for i in 0..9 {
-    //     s.manual[i] -= s.dt * s.decay;
-    //     l.dimmers[i] = l.dimmers[i].max(s.manual[i]);
-    // }
-
-    // log::info!("{:?}", l.dimmers);
-
-    // match s.mode {
-    //     Mode::On => {
-    //         for i in 0..9 {
-    //             l.dimmers[i] = s.brightness;
-    //         }
-    //         for i in 0..110 {
-    //             l.test[i] = s.brightness;
-    //         }
-    //     }
-    //     Mode::Off => {
-    //         for i in 0..9 {
-    //             l.dimmers[i] = 0.0;
-    //         }
-    //     }
-    //     Mode::Manual => {
-    //         for i in 0..9 {
-    //             l.dimmers[i] = s.manual[i];
-    //         }
-    //         //
-    //     }
-    //     Mode::Sequential => {
-    //         let target = (s.t).floor() as usize % 110;
-    //         println!("{target}");
-    //         for i in 1..109 {
-    //             l.test[i] = if i == target { s.brightness } else { 0.0 };
-    //         }
-    //         // for i in 0..9 {
-    //         //     l.dimmers[i] = if i == target { s.brightness } else { 0.0 };
-    //         // }
-    //     }
-    //     Mode::Random => {
-    //         let step = (s.t).floor() as usize;
-    //         if step > s.rand_step {
-    //             let prev_idx = s.rand_idx;
-    //             while s.rand_idx == prev_idx {
-    //                 s.rand_idx = rand::thread_rng().gen_range(0..9) as usize;
-    //             }
-
-    //             s.rand_step = step;
-
-    //             for i in 0..9 {
-    //                 l.dimmers[i] = if i == s.rand_idx { s.brightness } else { 0.0 };
-    //             }
-    //         }
-    //     }
-    //     Mode::Circle => {
-    //         let target = (s.t).floor() as usize % 8;
-    //         for i in 0..8 {
-    //             let n = match i {
-    //                 0 => 0,
-    //                 1 => 1,
-    //                 2 => 2,
-    //                 3 => 5,
-    //                 4 => 8,
-    //                 5 => 7,
-    //                 6 => 6,
-    //                 7 => 3,
-    //                 _ => unreachable!(),
-    //             };
-
-    //             l.dimmers[n] = if i == target { s.brightness } else { 0.0 };
-    //         }
-    //         l.dimmers[4] = 0.0;
-    //     }
-    //     Mode::Spiral => {}
-    // }
-
-    // let random_colors = || match ThreadRng::default().gen_range(1..=8) {
-    //     1 => Colors::Solid(Rgbw::RED),
-    //     2 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
-    //     3 => Colors::Solid(Rgbw::RED),
-    //     4 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
-    //     5 => Colors::Solid(Rgbw::RED),
-    //     6 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
-    //     7 | 8 | _ => Colors::Rainbow,
-    // };
-    // fn randomize<T: Copy + PartialEq>(value: &mut T, func: impl Fn() -> T) {
-    //     loop {
-    //         let v = func();
-    //         if v != *value {
-    //             *value = v;
-    //             break;
-    //         }
-    //     }
-    // }
+    match s.mode {
+        Mode::Todo => {}
+        Mode::Jam => {
+            for i in 0..9 {
+                let map = |duty: f64| if duty == 1.0 { 4.0 } else { duty };
+                s.jam_rgbw0[i] -= s.dt * map(1.0 - s.duty0) * s.pattern0.apply(s, s.duty0) * 4.0;
+                s.jam_rgbw1[i] -= s.dt * map(1.0 - s.duty1) * s.pattern1.apply(s, s.duty1) * 4.0;
+                s.jam_dimmer[i] -= s.dt * (1.0 - s.duty2) * 2.0;
+            }
+        }
+    }
 }
 
 ///////////////////////// PAD INPUT /////////////////////////
 
+#[rustfmt::skip]
 pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
+    use crate::logic::Mode;
     use launchpad_x::{types::*, *};
     log::debug!("pad: {event:?}");
+
+    match event {
+        Input::Up(true) => s.mode = Mode::Todo,
+        Input::Down(true) => s.mode = Mode::Jam,
+        _ => {},
+    }
 
     if let Some((x, y)) = match event {
         Input::Press(i, _) => Some((Coord::from(i).0, Coord::from(i).1)),
         _ => None,
     } {
-        // let i = x / 3;
-        // let j = y / 3;
-        // let n = (j * 3) + i;
-        // log::info!("Pressed i={i} j={j} n={n}");
-        // s.manual[n as usize] = 1.0;
-        // l.dimmers[n as usize] = 1.0;
+
+        match s.mode {
+            Mode::Todo => {},
+            Mode::Jam => {
+                use crate::logic::Color;
+                match (x, y) {
+
+                    (3, 3) => s.jam_dimmer[0] = 1.0,
+                    (4, 3) => s.jam_dimmer[1] = 1.0,
+                    (3, 4) => s.jam_dimmer[2] = 1.0,
+                    (4, 4) => s.jam_dimmer[3] = 1.0,
+                    (3, 5) => s.jam_dimmer[4] = 1.0,
+                    (4, 5) => s.jam_dimmer[5] = 1.0,
+                    (3, 6) => s.jam_dimmer[6] = 1.0,
+                    (4, 6) => s.jam_dimmer[7] = 1.0,
+
+                    (0..3, 0..3) => {
+                        let n = (y * 3) + x;
+                        s.jam_rgbw0[n as usize] = 1.0;
+                        s.jam_rgbw1[n as usize] = 0.0;
+                    },
+                    (5..8, 0..3) => {
+                        let n = (y * 3) + (x - 5);
+                        s.jam_rgbw0[n as usize] = 0.0;
+                        s.jam_rgbw1[n as usize] = 1.0;
+                    },
+                    (2, 3) => {
+                        for i in 0..9 {
+                            s.jam_rgbw0[i] = 1.0;
+                            s.jam_rgbw1[i] = 0.0;
+                        }
+                    },
+                    (7, 3) => {
+                        for i in 0..9 {
+                            s.jam_rgbw0[i] = 0.0;
+                            s.jam_rgbw1[i] = 1.0;
+                        }
+                    },
+                    (0, 8) => s.pattern0 = Pattern::Unit,
+                    (1, 8) => s.pattern0 = Pattern::Sine,
+                    (2, 8) => s.pattern0 = Pattern::Ramp,
+
+                    (5, 8) => s.pattern1 = Pattern::Unit,
+                    (6, 8) => s.pattern1 = Pattern::Sine,
+                    (7, 8) => s.pattern1 = Pattern::Ramp,
+                    _ => {
+                        s.color0 = match (x, y) {
+                            (0, 7) => Color::RedPurpleShift,
+                            (1, 7) => Color::GreenYellowShift,
+                            (2, 7) => Color::BlueGreenShift,
+
+                            (0, 6) => Color::Red,
+                            (1, 6) => Color::Orange,
+                            (2, 6) => Color::Yellow,
+
+                            (0, 5) => Color::Green,
+                            (1, 5) => Color::Mint,
+                            (2, 5) => Color::Cyan,
+
+                            (0, 4) => Color::Blue,
+                            (1, 4) => Color::Purple,
+                            (2, 4) => Color::Magenta,
+
+                            (0, 3) => Color::White,
+                            (1, 3) => Color::Rainbow,
+
+                            _ => s.color0,
+                        };
+
+                        s.color1 = match (x, y) {
+                            (5, 7) => Color::RedPurpleShift,
+                            (6, 7) => Color::GreenYellowShift,
+                            (7, 7) => Color::BlueGreenShift,
+
+                            (5, 6) => Color::Red,
+                            (6, 6) => Color::Orange,
+                            (7, 6) => Color::Yellow,
+
+                            (5, 5) => Color::Green,
+                            (6, 5) => Color::Mint,
+                            (7, 5) => Color::Cyan,
+
+                            (5, 4) => Color::Blue,
+                            (6, 4) => Color::Purple,
+                            (7, 4) => Color::Magenta,
+
+                            (5, 3) => Color::White,
+                            (6, 3) => Color::Rainbow,
+
+                            _ => s.color1,
+                        };
+                    }
+                }
+            },
+        }
 
         match (x, y) {
-            // // Beatmatch
-            // (0, 7) => s.bpm_taps.push(s.t),
-            // // Beatmatch apply
-            // (7, 7) => match s.bpm_taps.len() {
-            //     // If no beats, just reset phase
-            //     0 => s.phi = 0.0,
-            //     1 => s.bpm_taps.clear(),
-            //     n => {
-            //         // Calculate time difference between each consecutive tap
-            //         let dts = s.bpm_taps.drain(..).tuple_windows().map(|(t0, t1)| t1 - t0);
-            //         // Average out the difference
-            //         let dt = dts.sum::<f64>() / (n as f64 - 1.0);
-            //         // Calculate BPM
-            //         let bpm = 60.0 / dt;
-
-            //         s.phi = 0.0;
-            //         s.bpm = bpm;
-            //         log::info!("Calculated bpm={bpm:.2} from {n} samples");
-            //     }
-            // },
             _ => {}
         }
     }
@@ -428,39 +458,71 @@ pub fn on_ctrl(s: &mut State, l: &mut Lights, ctrl: &mut Midi<LaunchControlXL>, 
     log::debug!("ctrl: {input:?}");
 
     match input {
-        Input::SendA(0, fr) => s.brightness = (fr * 0.5) + 0.5,
-        Input::SendA(1, fr) => s.speed_coarse = (fr * 0.5) + 0.5,
-        Input::SendA(2, fr) => s.speed_fine = (fr * 0.5) + 0.5,
+        // Input::SendA(0, fr) => s.brightness = (fr * 0.5) + 0.5,
+        Input::SendA(0, fr) => s.speed_coarse = (fr * 0.5) + 0.5,
+        Input::SendA(1, fr) => s.speed_fine = (fr * 0.5) + 0.5,
         Input::SendA(7, fr) => s.house = (fr * 0.5) + 0.5,
 
-        // Input::Slider(0, fr) => s.brightness = fr,
-        // Input::Slider(1, fr) => s.speed = fr * 60.0,
-        // Input::Slider(2, fr) => s.decay = fr * 3.0,
-        // Input::Slider(3, fr) => l.test[0] = fr,
-        //
-        // Input::Slider(0, fr) => l.test[0] = fr,
-        // Input::Slider(1, fr) => l.test[1] = fr,
-        // Input::Slider(2, fr) => l.test[2] = fr,
-        // Input::Slider(3, fr) => l.test[3] = fr,
-        // Input::Slider(4, fr) => l.test[4] = fr,
-        // Input::Slider(5, fr) => l.test[5] = fr,
-        // Input::Slider(6, fr) => l.test[6] = fr,
-        // Input::Slider(7, fr) => l.test[7] = fr,
+        Input::Pan(i, fr) => s.knobs[i as usize] = (fr * 0.5) + 0.5,
 
-        // laser tweaks
-        // Input::Focus(0, true) => l.laser.on = !l.laser.on,
-        // Input::Slider(1, fr) => {
-        //     l.laser.pattern = LaserPattern::Raw(fr.byte());
-        //     println!("{:?}", l.laser.pattern);
-        // }
-        // Input::Slider(2, fr) => l.laser.rotate = fr,
-        // Input::Slider(3, fr) => l.laser.x = fr,
-        // Input::Slider(4, fr) => l.laser.y = fr,
-        // Input::Slider(5, fr) => l.laser.size = fr,
-        // Input::Slider(6, fr) => l.laser.color = LaserColor::Raw(fr.byte()),
+        Input::Slider(0, fr) => s.brightness = fr,
+        Input::Slider(1, fr) => s.dimmer_brightness = fr,
+        Input::Slider(2, fr) => s.duty0 = fr,
+        Input::Slider(3, fr) => s.duty1 = fr,
+        Input::Slider(4, fr) => s.duty2 = fr,
 
-        // Input::Slider(3, fr) => l.laser.xflip = fr,
-        // Input::Slider(4, fr) => l.laser.yflip = fr,
+        Input::Slider(7, fr) => s.range = fr,
         _ => {}
+    }
+}
+
+impl Color {
+    pub fn render(self, s: &State) -> Rgbw {
+        use Color::*;
+
+        match self {
+            /* ---------- Static colours ---------- */
+            House => Rgbw(1.00, 0.48, 0.0, 0.0),
+            White => Rgbw::WHITE,
+            Red => Rgbw::RED,
+            Orange => Rgbw::ORANGE,
+            Yellow => Rgbw::YELLOW,
+            Green => Rgbw::LIME,
+            Pea => Rgbw::PEA,
+            Blue => Rgbw::BLUE,
+            Cyan => Rgbw::CYAN,
+            Purple => Rgbw::VIOLET,
+            Magenta => Rgbw::MAGENTA,
+            Mint => Rgbw::MINT,
+
+            RedWhite => Rgbw(1.0, 0.0, 0.0, 1.0),
+            GreenWhite => Rgbw(0.0, 1.0, 0.0, 1.0),
+            BlueWhite => Rgbw(0.0, 0.0, 1.0, 1.0),
+
+            RedPurpleShift => {
+                let t = ((s.t * 0.25).sin() * 0.5 + 0.5); // 0‥1
+                let a = Rgbw::RED;
+                let b = Rgbw::VIOLET;
+                Rgbw(t.lerp(a.0..b.0), t.lerp(a.1..b.1), t.lerp(a.2..b.2), t.lerp(a.3..b.3))
+            }
+            GreenYellowShift => {
+                let t = ((s.t * 0.25).sin() * 0.5 + 0.5);
+                let a = Rgbw::MINT;
+                let b = Rgbw::YELLOW;
+                Rgbw(t.lerp(a.0..b.0), t.lerp(a.1..b.1), t.lerp(a.2..b.2), t.lerp(a.3..b.3))
+            }
+            BlueGreenShift => {
+                let t = ((s.t * 0.25).sin() * 0.5 + 0.5);
+                let a = Rgbw::BLUE;
+                let b = Rgbw::LIME;
+                Rgbw(t.lerp(a.0..b.0), t.lerp(a.1..b.1), t.lerp(a.2..b.2), t.lerp(a.3..b.3))
+            }
+
+            Rainbow => {
+                let hue = (s.t * 0.05).fract(); // Wraps at 1.0
+                let rgb: Rgb = Rgb::hsv(hue, 1.0, 1.0);
+                rgb.into()
+            }
+        }
     }
 }
