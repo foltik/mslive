@@ -11,6 +11,7 @@ use stagebridge::{
 };
 
 use crate::lights::Lights;
+use crate::pages::Page;
 use crate::utils::Swatch;
 
 #[derive(Clone, Copy, Debug)]
@@ -80,17 +81,28 @@ impl Default for Presets {
     }
 }
 
-impl Presets {
-    pub fn tick(&mut self, dt: f64) {
+
+impl Page for Presets {
+    fn tick(&mut self, dt: f64) {
         self.time += dt;
     }
 
-    pub fn render(&self, l: &mut Lights) {
-        l.reset();
-        self.preset.render(self, l);
+    fn input_pad(&mut self, _pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
+        let Some((x, y)) = event.xy() else { return };
+
+        if let Some(swatch) = PALETTE.iter().find(|s| s.xy == (x, y)) {
+            self.preset = swatch.op;
+        }
     }
 
-    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
+    fn input_ctrl(&mut self, _event: launch_control_xl::Input) {}
+
+    fn output_lights(&self, lights: &mut Lights) {
+        lights.reset();
+        self.preset.render(self, lights);
+    }
+
+    fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
         use launchpad_x::{types::*, *};
 
         let mut batch: Vec<(Pos, Color)> = Vec::with_capacity(PALETTE.len());
@@ -101,12 +113,5 @@ impl Presets {
         pad.send(Output::Batch(batch));
     }
 
-    pub fn handle_pad(&mut self, event: launchpad_x::Input) {
-        let Some((x, y)) = event.xy() else { return };
-
-        if let Some(swatch) = PALETTE.iter().find(|s| s.xy == (x, y)) {
-            self.preset = swatch.op;
-        }
-    }
-    pub fn handle_ctrl(&mut self, _event: launch_control_xl::Input) {}
+    fn output_ctrl(&self, _ctrl: &mut Midi<launch_control_xl::LaunchControlXL>) {}
 }

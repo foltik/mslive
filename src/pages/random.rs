@@ -2,13 +2,17 @@ use rand::{seq::SliceRandom, Rng};
 use stagebridge::{
     color::{Rgb, Rgbw},
     midi::{
-        device::launchpad_x::{self, LaunchpadX},
+        device::{
+            launch_control_xl,
+            launchpad_x::{self, LaunchpadX},
+        },
         Midi,
     },
     num::Interp,
 };
 
 use crate::lights::Lights;
+use crate::pages::Page;
 
 const CRYSTAL: Rgb = Rgb(0.6, 0.1, 0.1);
 
@@ -84,29 +88,6 @@ pub enum BarEnv {
 }
 
 impl Random {
-    pub fn tick(&mut self, dt: f64) {
-        self.time += dt;
-        if self.time - self.last_randomize > 60.0 {
-            self.randomize();
-        }
-    }
-
-    pub fn handle_pad(&mut self, event: launchpad_x::Input) {
-        match event.xy() {
-            Some((0, 7)) => self.randomize_scanners(),
-            Some((1, 7)) => self.randomize_dimmers(),
-            Some((2, 7)) => self.randomize_other(),
-            Some(_) => self.randomize(),
-            None => {}
-        }
-    }
-
-    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
-        use launchpad_x::{types::*, *};
-        pad.send(Output::Rgb(Coord(0, 7).into(), Rgb(1.0, 1.0, 1.0)));
-        pad.send(Output::Rgb(Coord(1, 7).into(), Rgb(1.0, 1.0, 1.0)));
-        pad.send(Output::Rgb(Coord(2, 7).into(), Rgb(1.0, 1.0, 1.0)));
-    }
 
     fn reset(&mut self) {
         self.scanner1_on = false;
@@ -210,83 +191,6 @@ impl Random {
         }
     }
 
-    pub fn render(&self, l: &mut Lights) {
-        l.reset();
-
-        l.scanner1.on = self.scanner1_on;
-        l.scanner1.gobo = self.scanner1_gobo;
-        l.scanner1.scroll = self.scanner1_scroll.fr(self) * 0.5;
-        l.scanner1.rotate = self.scanner1_rotate.fr(self);
-        l.scanner1.spread = self.scanner1_spread.fr(self);
-
-        let bar_color = self.bar_color.rgbw();
-        for (i, bead) in l.bar.beads.iter_mut().enumerate() {
-            let i = i as f64;
-            let fr = match self.bar_env {
-                BarEnv::Solid => 1.0,
-                BarEnv::Chase => self.time.fract().phase(1.0, 0.1 * i).square(1.0, 0.5),
-            };
-            *bead = bar_color * fr * 0.05;
-        }
-        l.bar.angle = match self.bar_color {
-            BarColor::Off => 0.5,
-            _ => (self.time / 20.0).fsin(1.0) * 0.5 + 0.25,
-        };
-
-        match self.dimmers {
-            DimmersEnv::Off => {}
-            DimmersEnv::Chase => {
-                let total = self.dimmer_order.len() as f64;
-                let head = (self.time / 1.5).fmod(total);
-
-                for (n, &i) in self.dimmer_order.iter().enumerate() {
-                    let dist = (n as f64 - head + total).fmod(total);
-                    l.dimmer[i] = (1.0 - dist / 3.0).powf(1.5);
-                }
-            }
-            DimmersEnv::Sparkle => {
-                let total = self.dimmer_order.len() as f64;
-                let pos = (self.time / 2.0).tri(1.0) * (total - 1.0); // bounce back and forth
-
-                for (n, &i) in self.dimmer_order.iter().enumerate() {
-                    let dist = (n as f64 - pos).abs();
-                    l.dimmer[i] = (1.0 - dist).clip(0.0..1.0).powf(2.0); // peak in center
-                }
-                // for (n, &i) in self.dimmer_order.iter().enumerate() {
-                //     let phase = (self.time + n as f64 * 0.3).fmod(4.0);
-                //     l.dimmer[i] = phase.fsin(4.0).clip(0.0..1.0);
-                // }
-                // for (n, &i) in self.dimmer_order.iter().enumerate() {
-                //     let phase = (self.time + n as f64 * 0.25).fmod(4.0);
-                //     l.dimmer[i] = phase.tri(1.0);
-                // }
-            }
-            DimmersEnv::Wave => {
-                let wave_period = 10.0; // total wave + off cycle duration
-                let wave_width = 6.0; // portion of wave that actually lights
-                let fade_exponent = 2.0; // controls softness of wave edges
-
-                let t = self.time.fmod(wave_period);
-
-                for (n, &i) in self.dimmer_order.iter().enumerate() {
-                    let phase = (t + n as f64 * 0.4).fmod(wave_period); // wave sweeping across dimmers
-                    if phase < wave_width {
-                        let fr = (1.0 - (phase / wave_width)).clip(0.0..1.0);
-                        l.dimmer[i] = fr.powf(fade_exponent);
-                    } else {
-                        l.dimmer[i] = 0.0; // all off during pause
-                    }
-                }
-            }
-        }
-
-        for dimmer in &mut l.dimmer {
-            *dimmer = *dimmer;
-        }
-
-        l.crystal0 = self.crystal0;
-        l.crystal1 = self.crystal1;
-    }
 }
 
 impl BarColor {
@@ -301,4 +205,104 @@ impl BarColor {
             BarColor::White => Rgbw(0.0, 0.0, 0.0, 1.0),
         }
     }
+}
+
+impl Page for Random {
+    fn tick(&mut self, dt: f64) {
+        self.time += dt;
+        if self.time - self.last_randomize > 60.0 {
+            self.randomize();
+        }
+    }
+
+    fn input_pad(&mut self, _pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
+        match event.xy() {
+            Some((0, 7)) => self.randomize_scanners(),
+            Some((1, 7)) => self.randomize_dimmers(),
+            Some((2, 7)) => self.randomize_other(),
+            Some(_) => self.randomize(),
+            None => {}
+        }
+    }
+
+    fn input_ctrl(&mut self, _event: launch_control_xl::Input) {}
+
+    fn output_lights(&self, lights: &mut Lights) {
+        lights.reset();
+
+        lights.scanner1.on = self.scanner1_on;
+        lights.scanner1.gobo = self.scanner1_gobo;
+        lights.scanner1.scroll = self.scanner1_scroll.fr(self) * 0.5;
+        lights.scanner1.rotate = self.scanner1_rotate.fr(self);
+        lights.scanner1.spread = self.scanner1_spread.fr(self);
+
+        let bar_color = self.bar_color.rgbw();
+        for (i, bead) in lights.bar.beads.iter_mut().enumerate() {
+            let i = i as f64;
+            let fr = match self.bar_env {
+                BarEnv::Solid => 1.0,
+                BarEnv::Chase => self.time.fract().phase(1.0, 0.1 * i).square(1.0, 0.5),
+            };
+            *bead = bar_color * fr * 0.05;
+        }
+        lights.bar.angle = match self.bar_color {
+            BarColor::Off => 0.5,
+            _ => (self.time / 20.0).fsin(1.0) * 0.5 + 0.25,
+        };
+
+        match self.dimmers {
+            DimmersEnv::Off => {}
+            DimmersEnv::Chase => {
+                let total = self.dimmer_order.len() as f64;
+                let head = (self.time / 1.5).fmod(total);
+
+                for (n, &i) in self.dimmer_order.iter().enumerate() {
+                    let dist = (n as f64 - head + total).fmod(total);
+                    lights.dimmer[i] = (1.0 - dist / 3.0).powf(1.5);
+                }
+            }
+            DimmersEnv::Sparkle => {
+                let total = self.dimmer_order.len() as f64;
+                let pos = (self.time / 2.0).tri(1.0) * (total - 1.0);
+
+                for (n, &i) in self.dimmer_order.iter().enumerate() {
+                    let dist = (n as f64 - pos).abs();
+                    lights.dimmer[i] = (1.0 - dist).clip(0.0..1.0).powf(2.0);
+                }
+            }
+            DimmersEnv::Wave => {
+                let wave_period = 10.0;
+                let wave_width = 6.0;
+                let fade_exponent = 2.0;
+
+                let t = self.time.fmod(wave_period);
+
+                for (n, &i) in self.dimmer_order.iter().enumerate() {
+                    let phase = (t + n as f64 * 0.4).fmod(wave_period);
+                    if phase < wave_width {
+                        let fr = (1.0 - (phase / wave_width)).clip(0.0..1.0);
+                        lights.dimmer[i] = fr.powf(fade_exponent);
+                    } else {
+                        lights.dimmer[i] = 0.0;
+                    }
+                }
+            }
+        }
+
+        for dimmer in &mut lights.dimmer {
+            *dimmer = *dimmer;
+        }
+
+        lights.crystal0 = self.crystal0;
+        lights.crystal1 = self.crystal1;
+    }
+
+    fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
+        use launchpad_x::{types::*, *};
+        pad.send(Output::Rgb(Coord(0, 7).into(), Rgb(1.0, 1.0, 1.0)));
+        pad.send(Output::Rgb(Coord(1, 7).into(), Rgb(1.0, 1.0, 1.0)));
+        pad.send(Output::Rgb(Coord(2, 7).into(), Rgb(1.0, 1.0, 1.0)));
+    }
+
+    fn output_ctrl(&self, _ctrl: &mut Midi<launch_control_xl::LaunchControlXL>) {}
 }

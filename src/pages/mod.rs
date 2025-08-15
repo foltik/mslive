@@ -26,7 +26,8 @@ pub trait Page {
 pub fn pages() -> Vec<Box<dyn Page>> {
     vec![
         Box::new(generators::Generators::default()),
+        Box::new(presets::Presets::default()),
+        Box::new(random::Random::default()),
         Box::new(test::Test::default()),
-        //
     ]
 }
