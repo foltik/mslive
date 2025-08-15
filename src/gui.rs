@@ -20,22 +20,30 @@ fn render_inner(s: &State, l: &Lights, p: &egui::Painter, w0: f64, h0: f64) {
     let y0 = (h0 - h) * 0.5;
 
     // pages
-    let page = |i, on| {
+    for i in 0..s.pages.len() {
         rect(
             p,
-            if on { Rgbw::WHITE } else { Rgbw::BLACK },
+            if s.page == i { Rgbw::WHITE } else { Rgbw::BLACK },
             x0 + (w * 0.05 * i as f64),
             y0 + (h * 0.05),
             20.0,
             20.0,
         )
-    };
-    page(0, matches!(s.page, Page::Generators));
-    page(1, matches!(s.page, Page::Presets));
-    page(2, matches!(s.page, Page::Random));
+    }
 
+    // Brightness
     rect(p, Rgbw::BLACK, x0, y0 + (h * 0.2), 10.0, 60.0);
     rect(p, Rgbw::WHITE, x0, y0 + (h * 0.2) + 30.0 - (30.0 * s.brightness), 10.0, 60.0 * s.brightness);
+    // Brightness Ceiling
+    rect(p, Rgbw::BLACK, x0 + 15.0, y0 + (h * 0.2), 10.0, 60.0);
+    rect(
+        p,
+        Rgbw::WHITE,
+        x0 + 15.0,
+        y0 + (h * 0.2) + 30.0 - (30.0 * s.brightness_ceil),
+        10.0,
+        60.0 * s.brightness_ceil,
+    );
 
     // TODO: why no worky
     // text(p, &format!("{:?}", s.presets.preset), 32.0, x0 + (w * 0.5), y0 + (h * 0.5));

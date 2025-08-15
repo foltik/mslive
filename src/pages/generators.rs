@@ -1,5 +1,6 @@
 use stagebridge::color::{Rgb, Rgbw};
 
+use stagebridge::midi::device::launch_control_xl::LaunchControlXL;
 use stagebridge::midi::device::{
     launch_control_xl::{self},
     launchpad_x::{self, LaunchpadX},
@@ -8,16 +9,62 @@ use stagebridge::midi::Midi;
 use stagebridge::prelude::*;
 
 use crate::lights::Lights;
+use crate::pages::Page;
+use crate::utils::Swatch;
+
+///////////////////////// PAGE /////////////////////////
+
+pub struct Generators {
+    gen0: Generator,
+    gen1: Generator,
+}
+
+impl Default for Generators {
+    fn default() -> Self {
+        Self { gen0: Generator::new(0), gen1: Generator::new(5) }
+    }
+}
+
+impl Page for Generators {
+    fn tick(&mut self, dt: f64) {
+        self.gen0.tick(dt);
+        self.gen1.tick(dt);
+    }
+
+    fn input_pad(&mut self, _pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
+        self.gen0.input_pad(event);
+        self.gen1.input_pad(event);
+    }
+
+    fn input_ctrl(&mut self, event: launch_control_xl::Input) {
+        self.gen0.input_ctrl(event);
+        self.gen1.input_ctrl(event);
+    }
+
+    fn output_lights(&self, lights: &mut Lights) {
+        self.gen0.output_lights(lights);
+        self.gen1.output_lights(lights);
+    }
+
+    fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
+        self.gen0.output_pad(pad);
+        self.gen1.output_pad(pad);
+    }
+
+    fn output_ctrl(&self, ctrl: &mut Midi<LaunchControlXL>) {
+        self.gen0.output_ctrl(ctrl);
+        self.gen1.output_ctrl(ctrl);
+    }
+}
 
 ///////////////////////// STATE /////////////////////////
 
-pub struct Generator {
+struct Generator {
     x: i8,
 
     time: f64,
     rgbw_decay: f64,
     speed: f64,
-    offset: f64,
     color: Color,
 
     rgbw_env: [f64; 9],
@@ -36,12 +83,6 @@ enum Color {
     GreenShift,
     BlueShift,
     Rainbow,
-}
-
-#[derive(Clone, Copy)]
-pub struct Swatch<T> {
-    pub xy: (i8, i8),
-    pub op: T,
 }
 
 #[derive(Clone, Copy)]
@@ -98,7 +139,6 @@ impl Generator {
 
             time: 0.0,
             speed: 1.0,
-            offset: 0.0,
             color: Color::Solid(Rgbw::HOUSE),
 
             rgbw_env: Default::default(),
@@ -123,7 +163,7 @@ impl Generator {
         }
     }
 
-    pub fn render(&self, l: &mut Lights) {
+    pub fn output_lights(&self, l: &mut Lights) {
         for i in 0..9 {
             l.rgbw[i] += self.render_rgbw(i);
         }
@@ -134,13 +174,13 @@ impl Generator {
     pub fn render_rgbw(&self, i: usize) -> Rgbw {
         let color = self.color.render(self.time);
         let env = self.rgbw_env[i];
-        color * ((env * self.rgbw_alpha * self.rgbw_range) + self.offset)
+        color * (env * self.rgbw_alpha * self.rgbw_range)
     }
     pub fn render_dimmer(&self, i: usize) -> f64 {
         self.dimmer_env[i] * self.dimmer_alpha
     }
 
-    pub fn render_pad(&self, pad: &mut Midi<LaunchpadX>) {
+    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
         use launchpad_x::{types::*, *};
 
         let mut batch: Vec<(Pos, Color)> = Vec::with_capacity(PALETTE.len());
@@ -156,7 +196,16 @@ impl Generator {
         pad.send(Output::Batch(batch));
     }
 
-    pub fn handle_pad(&mut self, event: launchpad_x::Input) {
+    pub fn output_ctrl(&self, ctrl: &mut Midi<LaunchControlXL>) {
+        use launch_control_xl::{types::*, *};
+
+        for i in 0..3 {
+            ctrl.send(Output::Pan(self.x as u8 + i, Color::Red, Brightness::High));
+            ctrl.send(Output::Focus(self.x as u8 + i, Color::Red, Brightness::High));
+        }
+    }
+
+    pub fn input_pad(&mut self, event: launchpad_x::Input) {
         log::debug!("pad: {event:?}");
 
         let Some((x, y)) = event.xy() else { return };
@@ -172,16 +221,15 @@ impl Generator {
         }
     }
 
-    pub fn handle_ctrl(&mut self, event: launch_control_xl::Input) {
+    pub fn input_ctrl(&mut self, event: launch_control_xl::Input) {
         use launch_control_xl::*;
         log::debug!("ctrl: {event:?}");
 
         match event {
-            /* ──────── speed/offset knobs ───────── */
+            /* ──────── range/speed knobs ───────── */
             Input::Pan(i, fr) if i == self.x as u8 + 0 => self.rgbw_range = fr.ilerp(-1.0..1.0),
             Input::Pan(i, fr) if i == self.x as u8 + 1 => self.dimmer_alpha = fr.ilerp(-1.0..1.0),
             Input::Pan(i, fr) if i == self.x as u8 + 2 => self.speed = fr.ilerp(-1.0..1.0) * 4.0,
-            Input::Pan(i, fr) if i == self.x as u8 + 3 => self.offset = fr.ilerp(-1.0..1.0),
             /* ───────── envelope sliders ───────── */
             Input::Slider(i, fr) if i == self.x as u8 + 0 => self.rgbw_decay = fr,
             Input::Slider(i, fr) if i == self.x as u8 + 1 => self.rgbw_alpha = fr,

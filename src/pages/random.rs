@@ -101,7 +101,7 @@ impl Random {
         }
     }
 
-    pub fn render_pad(&self, pad: &mut Midi<LaunchpadX>) {
+    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
         use launchpad_x::{types::*, *};
         pad.send(Output::Rgb(Coord(0, 7).into(), Rgb(1.0, 1.0, 1.0)));
         pad.send(Output::Rgb(Coord(1, 7).into(), Rgb(1.0, 1.0, 1.0)));

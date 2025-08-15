@@ -10,7 +10,8 @@ use stagebridge::{
     num::Interp,
 };
 
-use crate::{generator::Swatch, lights::Lights};
+use crate::lights::Lights;
+use crate::utils::Swatch;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Preset {
@@ -89,7 +90,7 @@ impl Presets {
         self.preset.render(self, l);
     }
 
-    pub fn render_pad(&self, pad: &mut Midi<LaunchpadX>) {
+    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
         use launchpad_x::{types::*, *};
 
         let mut batch: Vec<(Pos, Color)> = Vec::with_capacity(PALETTE.len());
