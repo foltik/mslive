@@ -39,9 +39,9 @@ enum Color {
 }
 
 #[derive(Clone, Copy)]
-struct Swatch {
-    xy: (i8, i8),
-    op: Op,
+pub struct Swatch<T> {
+    pub xy: (i8, i8),
+    pub op: T,
 }
 
 #[derive(Clone, Copy)]
@@ -53,7 +53,7 @@ enum Op {
 }
 
 #[rustfmt::skip]
-const PALETTE: &[Swatch] = &[
+const PALETTE: &[Swatch<Op>] = &[
     /* ───────── colors ───────── */
     Swatch { xy: (0, 7), op: Op::Color(Color::RedShift) },
     Swatch { xy: (1, 7), op: Op::Color(Color::GreenShift) },
@@ -81,14 +81,14 @@ const PALETTE: &[Swatch] = &[
     Swatch { xy: (2, 2), op: Op::RgbwEnv(8) },
     Swatch { xy: (2, 3), op: Op::RgbwEnvAll },
     /* ──────── dimmer env ──────── */
-    Swatch { xy: (3, 0), op: Op::DimmerEnv(0) },
-    Swatch { xy: (3, 1), op: Op::DimmerEnv(1) },
-    Swatch { xy: (3, 2), op: Op::DimmerEnv(2) },
-    Swatch { xy: (3, 3), op: Op::DimmerEnv(3) },
-    Swatch { xy: (3, 4), op: Op::DimmerEnv(4) },
+    Swatch { xy: (3, 7), op: Op::DimmerEnv(1) },
+    Swatch { xy: (4, 7), op: Op::DimmerEnv(0) },
+    Swatch { xy: (3, 6), op: Op::DimmerEnv(3) },
+    Swatch { xy: (4, 6), op: Op::DimmerEnv(2) },
     Swatch { xy: (3, 5), op: Op::DimmerEnv(5) },
-    Swatch { xy: (3, 6), op: Op::DimmerEnv(6) },
-    Swatch { xy: (3, 7), op: Op::DimmerEnv(7) },
+    Swatch { xy: (4, 5), op: Op::DimmerEnv(4) },
+    Swatch { xy: (3, 4), op: Op::DimmerEnv(7) },
+    Swatch { xy: (4, 4), op: Op::DimmerEnv(6) },
 ];
 
 impl Generator {

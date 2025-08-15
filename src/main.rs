@@ -1,19 +1,28 @@
 use anyhow::Result;
 use clap::Parser;
+use stagebridge::num::Interp;
 use std::time::Instant;
 
-use stagebridge::midi::device::{
-    launch_control_xl::{self, LaunchControlXL},
-    launchpad_x::{self, LaunchpadX},
-};
 use stagebridge::midi::Midi;
+use stagebridge::{
+    color::Rgb,
+    midi::device::{
+        launch_control_xl::{self, LaunchControlXL},
+        launchpad_x::{self, LaunchpadX},
+    },
+};
 
+mod dmx;
+mod generator;
 mod gui;
 mod lights;
-mod logic;
+mod presets;
+mod random;
 
+use generator::Generator;
 use lights::Lights;
-use logic::Generator;
+use presets::Presets;
+use random::Random;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -23,37 +32,142 @@ struct Args {
     verbose: u8,
 }
 
+enum Page {
+    Generators,
+    Presets,
+    Random,
+}
+
 pub struct State {
+    page: Page,
     fx0: Generator,
     fx1: Generator,
+    presets: Presets,
+    random: Random,
+
+    brightness: f64,
+    test0: [f64; 8],
+
+    time: f64,
 }
 
 impl Default for State {
     fn default() -> Self {
-        Self { fx0: Generator::new(0), fx1: Generator::new(4) }
+        Self {
+            page: Page::Generators,
+            fx0: Generator::new(0),
+            fx1: Generator::new(5),
+            presets: Presets::default(),
+            random: Random::default(),
+
+            brightness: 1.0,
+            test0: [0.0; 8],
+            time: 0.0,
+        }
     }
 }
 
 impl State {
     pub fn tick(&mut self, dt: f64) {
-        self.fx0.tick(dt);
-        self.fx1.tick(dt);
+        self.time += dt;
+        match self.page {
+            Page::Generators => {
+                self.fx0.tick(dt);
+                self.fx1.tick(dt);
+            }
+            Page::Presets => self.presets.tick(dt),
+            Page::Random => self.random.tick(dt),
+        }
     }
     pub fn render(&self, lights: &mut Lights) {
-        self.fx0.render(lights);
-        self.fx1.render(lights);
+        match self.page {
+            Page::Generators => {
+                self.fx0.render(lights);
+                self.fx1.render(lights);
+            }
+            Page::Presets => self.presets.render(lights),
+            Page::Random => self.random.render(lights),
+        }
+
+        // Apply global brightness multiplier
+        for rgbw in &mut lights.rgbw {
+            *rgbw = *rgbw * self.brightness;
+        }
+        for dimmer in &mut lights.dimmer {
+            *dimmer = *dimmer * self.brightness;
+        }
+        for bead in &mut lights.bar.beads {
+            *bead = *bead * self.brightness;
+        }
+
+        if lights.scanner1.on {
+            lights.scanner1.brightness = (self.time * 16.0).square(1.0, 0.25) * 0.654;
+        } else {
+            lights.scanner1.brightness = 0.0;
+        }
+
+        lights.crystal0 = lights.crystal0 * self.brightness;
+        lights.crystal1 *= self.brightness;
     }
-    pub fn input_pad(&mut self, event: launchpad_x::Input) {
-        self.fx0.handle_pad(event);
-        self.fx1.handle_pad(event);
+    pub fn input_pad(&mut self, pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
+        use launchpad_x::*;
+
+        let page = match event {
+            Input::Up(true) => Some(Page::Generators),
+            Input::Down(true) => Some(Page::Presets),
+            Input::Left(true) => Some(Page::Random),
+            _ => None,
+        };
+        if let Some(page) = page {
+            self.page = page;
+            pad.send(Output::Clear);
+            return;
+        }
+
+        match self.page {
+            Page::Generators => {
+                self.fx0.handle_pad(event);
+                self.fx1.handle_pad(event);
+            }
+            Page::Presets => self.presets.handle_pad(event),
+            Page::Random => self.random.handle_pad(event),
+        };
     }
     pub fn input_ctrl(&mut self, event: launch_control_xl::Input) {
-        self.fx0.handle_ctrl(event);
-        self.fx1.handle_ctrl(event);
+        println!("{event:?}");
+
+        use launch_control_xl::*;
+        match event {
+            Input::Slider(7, fr) => self.brightness = fr,
+            // Input::Slider(i, fr) => self.test0[i as usize] = fr,
+            _ => {}
+        }
+
+        match self.page {
+            Page::Generators => {
+                self.fx0.handle_ctrl(event);
+                self.fx1.handle_ctrl(event);
+            }
+            Page::Presets => self.presets.handle_ctrl(event),
+            Page::Random => {}
+        }
     }
-    pub fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
-        self.fx0.render_pad(pad);
-        self.fx1.render_pad(pad);
+    pub fn render_pad(&self, pad: &mut Midi<LaunchpadX>) {
+        use launchpad_x::{types::*, *};
+
+        let on = |b| if b { Rgb::VIOLET } else { Rgb::WHITE };
+        pad.send(Output::Rgb(Coord(0, 8).into(), on(matches!(self.page, Page::Generators))));
+        pad.send(Output::Rgb(Coord(1, 8).into(), on(matches!(self.page, Page::Presets))));
+        pad.send(Output::Rgb(Coord(2, 8).into(), on(matches!(self.page, Page::Random))));
+
+        match self.page {
+            Page::Generators => {
+                self.fx0.render_pad(pad);
+                self.fx1.render_pad(pad);
+            }
+            Page::Presets => self.presets.render_pad(pad),
+            Page::Random => self.random.render_pad(pad),
+        }
     }
 }
 
@@ -79,7 +193,7 @@ fn main() -> Result<()> {
     {
         use launchpad_x::{types::*, *};
         pad.send(Output::Pressure(Pressure::Off, PressureCurve::Medium));
-        pad.send(Output::Brightness(1.0));
+        pad.send(Output::Brightness(0.0));
     }
 
     // Connect to our DMX bridge
@@ -91,7 +205,8 @@ fn main() -> Result<()> {
     let mut last = Instant::now();
     let opts = eframe::NativeOptions {
         always_on_top: true,
-        initial_window_size: Some(egui::Vec2 { x: 640.0, y: 800.0 }),
+        initial_window_size: Some(egui::Vec2 { x: 800.0, y: 480.0 }),
+        fullscreen: true,
         ..Default::default()
     };
     eframe::run_simple_native("lsd", opts, move |ctx, _frame| {
@@ -102,18 +217,20 @@ fn main() -> Result<()> {
             state.input_ctrl(input);
         }
         for input in pad.recv() {
-            state.input_pad(input);
+            state.input_pad(&mut pad, input);
         }
 
         state.tick(dt);
-        state.output_pad(&mut pad);
+        state.render_pad(&mut pad);
 
         lights.reset();
         state.render(&mut lights);
+        lights.send();
 
-        gui::render(&lights, ctx);
+        gui::render(&state, &lights, ctx);
         ctx.request_repaint();
-    })?;
+    })
+    .unwrap();
 
     Ok(())
 }

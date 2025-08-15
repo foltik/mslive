@@ -1,9 +1,12 @@
 use anyhow::Result;
 use std::net::IpAddr;
 
-use stagebridge::color::Rgbw;
 use stagebridge::e131::E131;
+use stagebridge::{color::Rgbw, dmx::Device};
+
 use stagebridge::prelude::*;
+
+use crate::dmx::{Bar, Scanner1, Scanner2};
 
 pub struct Lights {
     e131: E131,
@@ -11,6 +14,14 @@ pub struct Lights {
 
     pub dimmer: [f64; 9],
     pub rgbw: [Rgbw; 9],
+    pub scanner1: Scanner1,
+    pub scanner2: Scanner2,
+    pub crystal0: Rgb,
+    pub crystal1: f64,
+    pub bar: Bar,
+
+    pub test0: [u8; 8],
+    pub test1: [u8; 8],
 }
 
 impl Lights {
@@ -20,16 +31,28 @@ impl Lights {
             addr,
             rgbw: [Rgbw::BLACK; 9],
             dimmer: Default::default(),
+            scanner1: Scanner1::default(),
+            scanner2: Scanner2::default(),
+            bar: Bar::default(),
+            crystal1: 0.0,
+            crystal0: Rgb::BLACK,
+            test0: [0; 8],
+            test1: [0; 8],
         })
     }
 
     pub fn reset(&mut self) {
         self.dimmer = Default::default();
         self.rgbw = Default::default();
+        self.bar = Default::default();
+        self.scanner1 = Default::default();
+        self.scanner2 = Default::default();
+        self.crystal0 = Default::default();
+        self.crystal1 = 0.0;
     }
 
     pub fn send(&mut self) {
-        let mut dmx = [0u8; 110];
+        let mut dmx = [0u8; 200];
 
         // RGBW bars
         macro_rules! rgbw {
@@ -50,10 +73,25 @@ impl Lights {
         rgbw!(self, dmx, 49, 7);
         rgbw!(self, dmx, 53, 8);
 
+        dmx[47] = self.crystal1.byte();
+        dmx[48] = if self.crystal1 > 0.0 { 255 } else { 0 };
+
+        // Mini crystal spot
+        dmx[60] = self.crystal0.0.byte();
+        dmx[61] = self.crystal0.1.byte();
+        dmx[62] = self.crystal0.2.byte();
+
         // Dimmer packs
         for i in 0..9 {
             dmx[100 + i] = self.dimmer[i].byte();
         }
+
+        // Scanners
+        self.scanner1.encode(&mut dmx[128..]);
+        self.scanner2.encode(&mut dmx[136..]);
+
+        // Light bar
+        self.bar.encode(&mut dmx[146..]);
 
         self.e131.send(&self.addr, &dmx);
     }
