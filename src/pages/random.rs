@@ -84,11 +84,11 @@ pub enum BarColor {
 pub enum BarEnv {
     #[default]
     Solid,
+    #[allow(unused)]
     Chase,
 }
 
 impl Random {
-
     fn reset(&mut self) {
         self.scanner1_on = false;
         self.crystal0 = Rgb::BLACK;
@@ -190,7 +190,6 @@ impl Random {
             }
         }
     }
-
 }
 
 impl BarColor {

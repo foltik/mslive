@@ -2,7 +2,7 @@ use stagebridge::color::{Rgb, Rgbw};
 use stagebridge::num::Interp;
 
 use crate::lights::Lights;
-use crate::{Page, State};
+use crate::State;
 
 pub fn render(s: &State, l: &Lights, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
