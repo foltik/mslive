@@ -24,6 +24,39 @@ palette! {
     (2, 7) => Dimmers,
     (3, 7) => WhiteBar,
     (0, 5) => Sine,
+    (7, 7) => Random,
+}
+
+struct Random;
+impl Preset for Random {
+    fn color(&self, s: &Presets) -> Rgb {
+        // color of the button on the launchpad
+        Rgb::WHITE
+    }
+
+    fn lights(&self, s: &Presets, l: &mut Lights) {
+        // s.t is a float representing the number of seconds elapsed since program start
+        // the fract() returns the decimal part, so 123.456 would return 0.456
+        let t = s.time.fract();
+
+        // this color alternates between WHITE and BLACK every 0.5s
+        let color = if t > 0.5 { Rgbw::WHITE } else { Rgbw::BLACK };
+
+        // l.rgbw: an array of colors that gets mapped to each RGB bar.
+        // for example: l.rgbw[0] is an Rgbw type: Rgbw(0.5, 1.0, 0.25, 0.3),
+        // where each number is the red, green, blue, white channel respectively
+        for rgbw_color in &mut l.rgbw {
+            *rgbw_color = color;
+        }
+
+        // l.dimmer: an array of brightnesses from 0.0 to 1.0 for each dimmer pack
+        // for example: l.dimmer[0] is a float
+        for dimmer_brightness in &mut l.dimmer {
+            *dimmer_brightness = 1.0;
+        }
+
+        // to see all the available properties on `l`, go to `lights.rs`
+    }
 }
 
 struct Off;
