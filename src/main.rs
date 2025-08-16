@@ -205,7 +205,7 @@ fn main() -> Result<()> {
     let opts = eframe::NativeOptions {
         always_on_top: true,
         initial_window_size: Some(egui::Vec2 { x: 800.0, y: 480.0 }),
-        fullscreen: true,
+        fullscreen: false,
         ..Default::default()
     };
     eframe::run_simple_native("lsd", opts, move |ctx, _frame| {

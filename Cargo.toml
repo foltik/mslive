@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-#stagebridge = { git = "https://github.com/foltik/stagebridge", branch = "main" }
-stagebridge = { path = "../stagebridge" }
+stagebridge = { git = "https://github.com/foltik/stagebridge", branch = "main" }
+#stagebridge = { path = "../stagebridge" }
 
 anyhow = "1"
 log = "0.4"
