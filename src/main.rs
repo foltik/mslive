@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
+use egui::Key;
 use stagebridge::num::Interp;
+use std::collections::HashSet;
 use std::time::Instant;
 
 use stagebridge::midi::Midi;
@@ -105,6 +107,10 @@ impl State {
 
         page
     }
+    pub fn input_keyboard(&mut self, keys_down: &HashSet<Key>) {
+        self.pages[self.page].input_keys(keys_down);
+    }
+
     pub fn input_ctrl(&mut self, event: launch_control_xl::Input) {
         // Global brightness control
         use launch_control_xl::*;
@@ -223,6 +229,8 @@ fn main() -> Result<()> {
         for input in ctrl.recv() {
             state.input_ctrl(input);
         }
+        let keys = ctx.input(|i| i.keys_down.clone());
+        state.input_keyboard(&keys);
 
         state.tick(dt);
         state.output_pad(&mut pad);

@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+
+use egui::Key;
 use stagebridge::midi::{
     device::{
         launch_control_xl::{self, LaunchControlXL},
@@ -22,12 +25,14 @@ pub trait Page {
     fn output_lights(&self, lights: &mut Lights) {}
     fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {}
     fn output_ctrl(&self, pad: &mut Midi<LaunchControlXL>) {}
+
+    fn input_keys(&mut self, keys: &HashSet<Key>) {}
 }
 
 pub fn pages() -> Vec<Box<dyn Page>> {
     vec![
-        Box::new(generators::Generators::default()),
         Box::new(presets::Presets::default()),
+        Box::new(generators::Generators::default()),
         Box::new(random::Random::default()),
         Box::new(test::Test::default()),
     ]

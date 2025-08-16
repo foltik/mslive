@@ -1,5 +1,8 @@
 #![allow(unused)]
 
+use std::collections::HashSet;
+
+use egui::Key;
 use stagebridge::{
     color::{Rgb, Rgbw},
     midi::{
@@ -19,12 +22,12 @@ use crate::utils::Swatch;
 ///////////////////////// PRESETS /////////////////////////
 
 palette! {
-    (0, 7) => Off,
-    (1, 7) => House,
-    (2, 7) => Dimmers,
-    (3, 7) => WhiteBar,
-    (0, 5) => Sine,
-    (7, 7) => Random,
+    Key::Num1; (0, 7) => Off,
+    Key::Num2; (1, 7) => House,
+    Key::Num3; (2, 7) => Dimmers,
+    Key::Num4; (3, 7) => WhiteBar,
+    Key::Num5; (0, 5) => Sine,
+    Key::Num6; (7, 7) => Random,
 }
 
 struct Random;
@@ -132,7 +135,7 @@ trait Preset {
 }
 
 pub struct Presets {
-    presets: Vec<Swatch<Box<dyn Preset>>>,
+    presets: Vec<(Key, Swatch<Box<dyn Preset>>)>,
     preset: usize,
     time: f64,
 }
@@ -152,19 +155,28 @@ impl Page for Presets {
     fn input_pad(&mut self, _pad: &mut Midi<LaunchpadX>, event: launchpad_x::Input) {
         let Some((x, y)) = event.xy() else { return };
 
-        if let Some((i, _swatch)) = self.presets.iter().enumerate().find(|(_i, s)| s.xy == (x, y)) {
+        if let Some((i, _swatch)) = self.presets.iter().enumerate().find(|(_i, (_k, s))| s.xy == (x, y)) {
             self.preset = i;
         }
     }
+    fn input_keys(&mut self, keys: &HashSet<Key>) {
+        for (i, (key, _)) in self.presets.iter().enumerate() {
+            if keys.contains(key) {
+                self.preset = i;
+            }
+        }
+        // if keys.contains(&Key::Num1) {
+        // }
+    }
 
     fn output_lights(&self, lights: &mut Lights) {
-        self.presets[self.preset].op.lights(self, lights);
+        self.presets[self.preset].1.op.lights(self, lights);
     }
     fn output_pad(&self, pad: &mut Midi<LaunchpadX>) {
         use launchpad_x::{types::*, *};
 
         let mut batch: Vec<(Pos, Color)> = Vec::with_capacity(self.presets.len());
-        for Swatch { xy: (x, y), op } in self.presets.iter() {
+        for (_key, Swatch { xy: (x, y), op }) in self.presets.iter() {
             let Rgb(r, g, b) = op.color(self);
             batch.push((Coord(*x, *y).into(), Color::Rgb(r, g, b)));
         }
@@ -174,10 +186,10 @@ impl Page for Presets {
 }
 
 macro_rules! palette {
-    ($(($x:expr, $y:expr) => $preset:expr),* $(,)?) => {
-        fn presets() -> Vec<Swatch<Box<dyn Preset>>> {
+    ($($key:expr ; ($x:expr, $y:expr) => $preset:expr),* $(,)?) => {
+        fn presets() -> Vec<(Key, Swatch<Box<dyn Preset>>)> {
             vec![
-                $( Swatch { xy: ($x, $y), op: Box::new($preset) } ),*
+                $( ($key, Swatch { xy: ($x, $y), op: Box::new($preset) }) ),*
             ]
         }
     }
