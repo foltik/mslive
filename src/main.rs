@@ -78,12 +78,14 @@ impl State {
             lights.crystal1 *= brightness_fr;
 
             // The brightness on scanner1 doesn't work properly, so we apply PWM to make it dimmer
-            if lights.scanner1.on {
-                // The
-                lights.scanner1.brightness = (self.time * 16.0).square(1.0, 0.25) * 0.654;
-            } else {
-                lights.scanner1.brightness = 0.0;
-            }
+            // if lights.scanner1.on {
+            //     lights.scanner1.brightness = (self.time * 16.0).square(1.0, 0.25) * 0.654;
+            // } else {
+            //     lights.scanner1.brightness = 0.0;
+            // }
+
+            let gobov = lights.scanner1.gobo.clamp(0.0, 1.0).lerp(0..170) as u8;
+            log::info!("brightness={:.02} gobo={:.02} midi={}", lights.scanner1.brightness, lights.scanner1.gobo, gobov);
         }
     }
 

@@ -63,15 +63,32 @@ impl Lights {
                 dmx[$chan + 3] = $self.rgbw[$i].3.byte();
             };
         }
-        rgbw!(self, dmx, 1, 0);
-        rgbw!(self, dmx, 5, 1);
-        rgbw!(self, dmx, 9, 2);
-        rgbw!(self, dmx, 13, 3);
-        rgbw!(self, dmx, 21, 4);
-        rgbw!(self, dmx, 25, 5);
-        rgbw!(self, dmx, 37, 6);
-        rgbw!(self, dmx, 49, 7);
-        rgbw!(self, dmx, 53, 8);
+
+        // let chan = 8;
+        // for i in 0..4 {
+        //     rgbw!(self, dmx, (3 * i) + chan, i);
+        // }
+
+        rgbw!(self, dmx, 8, 0);
+        rgbw!(self, dmx, 12, 1);
+        rgbw!(self, dmx, 16, 2);
+        rgbw!(self, dmx, 20, 3);
+
+        rgbw!(self, dmx, 32, 4);
+        rgbw!(self, dmx, 36, 5);
+        rgbw!(self, dmx, 40, 6);
+        rgbw!(self, dmx, 44, 7);
+        rgbw!(self, dmx, 48, 8);
+
+        // rgbw!(self, dmx, 1, 0);
+        // rgbw!(self, dmx, 5, 1);
+        // rgbw!(self, dmx, 9, 2);
+        // rgbw!(self, dmx, 13, 3);
+        // rgbw!(self, dmx, 21, 4);
+        // rgbw!(self, dmx, 25, 5);
+        // rgbw!(self, dmx, 37, 6);
+        // rgbw!(self, dmx, 49, 7);
+        // rgbw!(self, dmx, 53, 8);
 
         dmx[47] = self.crystal1.byte();
         dmx[48] = if self.crystal1 > 0.0 { 255 } else { 0 };
@@ -86,13 +103,21 @@ impl Lights {
             dmx[100 + i] = self.dimmer[i].byte();
         }
 
+        // for i in 0..200 {
+        //     dmx[i] = 0;
+        // }
+
         // Scanners
-        self.scanner1.encode(&mut dmx[128..]);
-        self.scanner2.encode(&mut dmx[136..]);
+        self.scanner1.encode(&mut dmx[1..]);
+        // self.scanner1.encode(&mut dmx[64..]);
+        // self.scanner1.encode(&mut dmx[128..]);
+        // self.scanner2.encode(&mut dmx[136..]);
 
         // Light bar
         self.bar.encode(&mut dmx[146..]);
 
+        println!("{:?}", &dmx[1..=(1 + 8)]);
+        // println!("{:?}", &dmx[128..=(128 + 8)]);
         self.e131.send(&self.addr, &dmx);
     }
 }
