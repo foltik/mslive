@@ -777,11 +777,13 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
                 beam.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1);
                 beam_pattern.apply(s, Pd(1, 2), beam, i, fr);
             });
+            l.for_each_hex(|hex, i, fr| hex.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1));
             l.strobe.color = Rgb::WHITE * s.pd(pd.mul(4)).phase(1.0, 0.0).square(1.0, 0.1);
         }
         Mode::ChaseSmooth { pd, beam: beam_pattern } => {
             let color = s.colors.color0(s, s.pd(pd));
             l.for_each_par(|par, i, fr| par.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0));
+            l.for_each_hex(|hwz, i, fr| hwz.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0));
             l.for_each_beam(|beam, i, fr| {
                 beam.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0);
                 beam_pattern.apply(s, Pd(4, 1), beam, i, fr);
@@ -871,6 +873,7 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
             spider.color1 = spider.color1 * fr1;
         });
         l.for_each_bar(|bar, i, fr| bar.color = bar.color * fr1);
+        l.for_each_hex(|hex, i, fr| hex.color = hex.color * fr0);
         l.strobe.color = l.strobe.color * fr0;
     }
 
