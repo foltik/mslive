@@ -53,6 +53,10 @@ pub struct State {
     pub phi: f64,
     /// Bpm multiplier, e.g. 0.5 for half-time, 2.0 for double-time.
     pub phi_mul: f64,
+    /// Second stacking bpm multiplier.
+    pub phi_mul2: f64,
+    /// Strobe duty cycle
+    pub duty: f64,
 
     /// Colors
     pub colors: Colors,
@@ -91,10 +95,14 @@ impl State {
     pub fn new() -> Self {
         Self {
             debug: true,
-            brightness: 0.25,
+            brightness: 1.0,
             colors: Colors::Rainbow,
             bpm: 120.0,
             phi_mul: 1.0,
+            phi_mul2: 1.0,
+
+            // mode: Mode::On { beams: None },
+            // brightness: 1.0,
             ..Default::default()
         }
     }
@@ -121,6 +129,7 @@ pub enum Mode {
     /// All on, solid color
     On {
         beams: Option<BeamPattern>,
+        spiders: Option<SpiderPattern>,
     },
     /// TODO: ???
     Hover,
@@ -151,6 +160,10 @@ pub enum Mode {
         beam: BeamPattern,
     },
     ChaseSmooth {
+        pd: Pd,
+        beam: BeamPattern,
+    },
+    ChaseColor {
         pd: Pd,
         beam: BeamPattern,
     },
@@ -185,6 +198,9 @@ pub enum Colors {
     RainbowOsc,
     RedWhiteOsc,
     BlueGreenOsc,
+    BlueYellowOsc,
+    BlueWhiteOsc,
+    GreenWhiteOsc,
     /// Solid color
     Solid(Rgbw),
     Split(Rgbw, Rgbw),
@@ -197,6 +213,8 @@ pub enum Palette {
     Redhot,
     Trance,
     Skullsystem,
+    Ashton1,
+    Ashton2,
 }
 
 impl Palette {
@@ -254,6 +272,52 @@ impl Palette {
                 (3, 1) => Colors::Solid(Rgbw::MAGENTA),
                 _ => Palette::Standard.colors(i, j),
             },
+            Palette::Ashton1 => match (i, j) {
+                // Whitez
+                (0, 0) => Colors::Solid(Rgbw::WHITE),
+                (0, 1) => Colors::Solid(Rgbw::RGBW),
+
+                // Primariez
+                (1, 0) => Colors::Solid(Rgbw::RED),
+                (1, 1) => Colors::Split(Rgbw::RED, Rgbw::WHITE),
+                (2, 0) => Colors::Solid(Rgbw::LIME),
+                (2, 1) => Colors::Split(Rgbw::LIME, Rgbw::WHITE),
+                (3, 0) => Colors::Solid(Rgbw::BLUE),
+                (3, 1) => Colors::Split(Rgbw::BLUE, Rgbw::WHITE),
+                (4, 0) => Colors::Split(Rgbw::YELLOW, Rgbw::WHITE),
+                (4, 1) => Colors::Split(Rgbw::YELLOW, Rgbw::BLUE),
+
+                // Rainbowz
+                (5, 0) => Colors::RedWhiteOsc,
+                (5, 1) => Colors::BlueWhiteOsc,
+                (6, 0) => Colors::GreenWhiteOsc,
+                (6, 1) => Colors::RgbOsc,
+
+                _ => Colors::Solid(Rgbw::WHITE),
+            },
+            Palette::Ashton2 => match (i, j) {
+                // Whitez
+                (0, 0) => Colors::Solid(Rgbw::WHITE),
+                (0, 1) => Colors::Solid(Rgbw::RGBW),
+
+                // Primariez
+                (1, 0) => Colors::Solid(Rgbw::RED),
+                (1, 1) => Colors::Solid(Rgbw::ORANGE),
+                (2, 0) => Colors::Solid(Rgbw::LIME),
+                (2, 1) => Colors::Solid(Rgbw::YELLOW),
+                (3, 0) => Colors::Solid(Rgbw::BLUE),
+                (3, 1) => Colors::Solid(Rgbw::CYAN),
+                (4, 0) => Colors::Split(Rgbw::BLUE, Rgbw::LIME),
+                (4, 1) => Colors::Split(Rgbw::BLUE, Rgbw::YELLOW),
+
+                // Rainbowz
+                (5, 0) => Colors::BlueGreenOsc,
+                (5, 1) => Colors::BlueYellowOsc,
+                (6, 0) => Colors::RainbowOsc,
+                (6, 1) => Colors::RgbOsc,
+
+                _ => Colors::Solid(Rgbw::WHITE),
+            },
         }
     }
 }
@@ -284,6 +348,18 @@ impl Colors {
             Colors::BlueGreenOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
                 ..0.5 => Rgbw::BLUE,
                 _ => Rgbw::LIME,
+            },
+            Colors::BlueYellowOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
+                ..0.5 => Rgbw::BLUE,
+                _ => Rgbw::YELLOW,
+            },
+            Colors::BlueWhiteOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
+                ..0.5 => Rgbw::BLUE,
+                _ => Rgbw::WHITE,
+            },
+            Colors::GreenWhiteOsc => match s.pd(Pd(1, 2)).ramp(1.0) {
+                ..0.5 => Rgbw::LIME,
+                _ => Rgbw::WHITE,
             },
             Colors::Solid(col) => col,
             Colors::Split(col0, _col1) => col0,
@@ -568,7 +644,7 @@ pub struct ManualBeat {
 
 ///////////////////////// SPIDER PATTERNS /////////////////////////
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SpiderPattern {
     Up,
     Down,
@@ -673,7 +749,7 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
                 BeamPattern::Out.apply(s, Pd(4, 1), beam, i, fr);
             });
         }
-        Mode::On { beams } => {
+        Mode::On { beams, spiders } => {
             l.split(s.colors.color0(s, 0.0), s.colors.color1(s, 0.0));
 
             if let Some(beams) = beams {
@@ -682,6 +758,9 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
                     beams.apply(s, Pd(4, 1), beam, i, fr);
                     beam.color = col;
                 });
+            }
+            if let Some(spiders) = spiders {
+                l.for_each_spider(|sp, i, fr| spiders.apply(s, sp, i, fr));
             }
         }
         Mode::AutoBeat { pd, r, beam: beam_pattern } => {
@@ -777,17 +856,33 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
                 beam.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1);
                 beam_pattern.apply(s, Pd(1, 2), beam, i, fr);
             });
-            l.for_each_hex(|hex, i, fr| hex.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1));
+            // l.for_each_hex(|hex, i, fr| hex.color = Rgbw::WHITE * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1));
             l.strobe.color = Rgb::WHITE * s.pd(pd.mul(4)).phase(1.0, 0.0).square(1.0, 0.1);
         }
         Mode::ChaseSmooth { pd, beam: beam_pattern } => {
             let color = s.colors.color0(s, s.pd(pd));
             l.for_each_par(|par, i, fr| par.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0));
-            l.for_each_hex(|hwz, i, fr| hwz.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0));
+            // l.for_each_hex(|hwz, i, fr| hwz.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0));
             l.for_each_beam(|beam, i, fr| {
                 beam.color = color * s.pd(pd.mul(4)).phase(1.0, fr).tri(1.0);
                 beam_pattern.apply(s, Pd(4, 1), beam, i, fr);
             });
+            l.for_each_spider(|sp, i, fr| {
+                sp.color0 = color;
+                sp.color1 = color;
+                SpiderPattern::Alternate { pd: Pd(2, 1) }.apply(s, sp, i, fr)
+            });
+        }
+        Mode::ChaseColor { pd, beam: beam_pattern } => {
+            let color0 = s.colors.color0(s, 0.0);
+            let color1 = s.colors.color1(s, 0.0);
+
+            l.for_each_par(|par, i, fr| par.color = color0 * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1));
+            l.for_each_beam(|beam, i, fr| {
+                beam.color = color1 * s.pd(pd.mul(4)).phase(1.0, fr).square(1.0, 0.1);
+                beam_pattern.apply(s, Pd(1, 2), beam, i, fr);
+            });
+            l.strobe.color = Rgb::from(color1) * s.pd(pd.mul(4)).phase(1.0, 0.0).square(1.0, 0.1);
         }
         Mode::ChaseNotColorful { pd } => {
             let col0 = s.colors.color0(s, 0.0);
@@ -873,7 +968,7 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
             spider.color1 = spider.color1 * fr1;
         });
         l.for_each_bar(|bar, i, fr| bar.color = bar.color * fr1);
-        l.for_each_hex(|hex, i, fr| hex.color = hex.color * fr0);
+        // l.for_each_hex(|hex, i, fr| hex.color = hex.color * fr0);
         l.strobe.color = l.strobe.color * fr0;
     }
 
@@ -907,6 +1002,12 @@ pub fn render_lights(s: &mut State, l: &mut Lights) {
     // l.beams[3].yaw = s.test3;
 
     l.send();
+
+    // adj ils light bar
+    // adj pars
+
+    // l.syn.set_slider(0, s.t.fsin(1.0));
+    // l.syn.set_color(0, Rgb::from(s.colors.color0(s, 0.0)));
 }
 
 ///////////////////////// PAD /////////////////////////
@@ -917,9 +1018,11 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
 
     let mut batch: Vec<(Pos, Color)> = vec![];
 
+    let brightness = s.brightness.lerp(0.25..1.0);
+
     // Helper to set an x/y coord to a certain color
     let rgb = |Rgb(r, g, b): Rgb| Color::Rgb(r, g, b);
-    let mut set = |x, y, color: Rgb| batch.push((Coord(x, y).into(), rgb(color)));
+    let mut set = |x, y, color: Rgb| batch.push((Coord(x, y).into(), rgb(color * brightness)));
 
     if s.debug {
         let color0: Rgb = s.colors.color0(s, 0.0).into();
@@ -983,7 +1086,7 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
         set(1, 5, color0 * beat116);
         set(2, 5, color0 * beat116);
         set(3, 5, color0 * beat116);
-        set(4, 5, color1 * beat116);
+        set(4, 5, color1 * beat132);
         set(5, 5, Rgb::WHITE * beat116);
         set(6, 5, Rgb::WHITE * beat132);
         set(7, 5, Rgb::WHITE * beat132);
@@ -1204,10 +1307,10 @@ pub fn render_pad(s: &mut State, pad: &mut Midi<LaunchpadX>) {
         8,
         match s.pd(Pd(1, 1)).bsquare(1.0, 0.1) {
             true => match s.pd(Pd(4, 1)).bsquare(1.0, 0.2) {
-                // Purple on the first beat of each bar
-                true => Rgb::VIOLET,
-                // White on every other beat
-                false => Rgb::WHITE,
+                // White on the first beat of each bar
+                true => Rgb::WHITE,
+                // Color0 on every other beat
+                false => s.colors.color0(s, 0.0).into(),
             },
             false => Rgb::BLACK,
         },
@@ -1259,7 +1362,9 @@ pub fn render_ctrl(s: &mut State, ctrl: &mut Midi<LaunchControlXL>) {
     set(0, matches!(s.palette, Palette::Standard));
     set(1, matches!(s.palette, Palette::Trance));
     set(2, matches!(s.palette, Palette::Redhot));
-    set(3, matches!(s.palette, Palette::Skullsystem));
+    set(3, matches!(s.palette, Palette::Ashton1));
+    set(4, matches!(s.palette, Palette::Ashton2));
+    set(5, matches!(s.palette, Palette::Skullsystem));
 }
 
 ///////////////////////// TICK /////////////////////////
@@ -1269,14 +1374,20 @@ pub fn tick(dt: f64, s: &mut State, l: &mut Lights) {
     s.t += dt;
     s.phi = (s.phi + (dt * (s.bpm / 60.0) * s.phi_mul)).fmod(64.0);
 
-    let random_colors = || match ThreadRng::default().gen_range(1..=8) {
+    let random_colors = || match ThreadRng::default().gen_range(1..=10) {
         1 => Colors::Solid(Rgbw::RED),
         2 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
-        3 => Colors::Solid(Rgbw::RED),
-        4 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
-        5 => Colors::Solid(Rgbw::RED),
-        6 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
-        7 | 8 | _ => Colors::Rainbow,
+        // 3 => Colors::Solid(Rgbw::RED),
+        // 4 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
+        // 5 => Colors::Solid(Rgbw::RED),
+        // 6 => Colors::Split(Rgbw::WHITE, Rgbw::RED),
+        3 => Colors::Solid(Rgbw::BLUE),
+        4 => Colors::Solid(Rgbw::CYAN),
+        5 => Colors::Solid(Rgbw::LIME),
+        6 => Colors::Solid(Rgbw::MINT),
+        7 => Colors::Solid(Rgbw::PEA),
+        8 => Colors::Solid(Rgbw::MAGENTA),
+        9 | 10 | _ => Colors::Rainbow,
     };
     let random_mode = || match ThreadRng::default().gen_range(1..=6) {
         1 => Mode::ChaseSmooth { pd: Pd(1, 1), beam: BeamPattern::WaveY },
@@ -1340,8 +1451,8 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
         Input::Note(true) => s.colors = Colors::Rainbow,
         // Input::Custom(true) => l.laser.on = !l.laser.on,
         // Brightness
-        Input::Record(true) => s.brightness = 0.07,
-        Input::Solo(true) => s.brightness = 0.1,
+        Input::Record(true) => s.brightness = 0.0,
+        Input::Solo(true) => s.brightness = 0.07,
         Input::Mute(true) => s.brightness = 0.125,
         Input::Stop(true) => s.brightness = 0.3,
         Input::B(true) => s.brightness = 0.4,
@@ -1444,12 +1555,32 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             (6, 0) => s.mode = Mode::Break { beams: Some(BeamPattern::UpDownWave) },
 
             // y=1: Solid patterns
-            (1, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Out) },
-            (2, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Out) },
-            (3, 1) => s.mode = Mode::On { beams: Some(BeamPattern::WaveY) },
-            (4, 1) => s.mode = Mode::On { beams: Some(BeamPattern::SnapX) },
-            (5, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Whirl) },
-            (6, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Twisting) },
+            (1, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Out), spiders: None },
+            (2, 1) => s.mode = Mode::On { beams: Some(BeamPattern::Out), spiders: None },
+            (3, 1) => {
+                s.mode = Mode::On {
+                    beams: Some(BeamPattern::WaveY),
+                    spiders: Some(SpiderPattern::Alternate { pd: Pd(2, 1) }),
+                }
+            }
+            (4, 1) => {
+                s.mode = Mode::On {
+                    beams: Some(BeamPattern::SnapX),
+                    spiders: Some(SpiderPattern::Alternate { pd: Pd(4, 1) }),
+                }
+            }
+            (5, 1) => {
+                s.mode = Mode::On {
+                    beams: Some(BeamPattern::Whirl),
+                    spiders: Some(SpiderPattern::Alternate { pd: Pd(4, 1) }),
+                }
+            }
+            (6, 1) => {
+                s.mode = Mode::On {
+                    beams: Some(BeamPattern::Twisting),
+                    spiders: Some(SpiderPattern::Alternate { pd: Pd(4, 1) }),
+                }
+            }
 
             (1, 2) => s.mode = Mode::ChaseSmooth { pd: Pd(1, 1), beam: BeamPattern::WaveY },
             (2, 2) => s.mode = Mode::AutoBeat { pd: Pd(4, 1), r: (0.2..1.0).into(), beam: BeamPattern::RaisingBeams },
@@ -1480,7 +1611,7 @@ pub fn on_pad(s: &mut State, l: &mut Lights, pad: &mut Midi<LaunchpadX>, event: 
             (1, 5) => s.mode = Mode::ChaseNotColorful { pd: Pd(1, 4) },
             (2, 5) => s.mode = Mode::Strobe { pd: Pd(1, 4), duty: 1.0 },
             (3, 5) => s.mode = Mode::Strobe { pd: Pd(1, 8), duty: 1.0 },
-            (4, 5) => s.mode = Mode::Strobe { pd: Pd(1, 8), duty: 1.0 },
+            (4, 5) => s.mode = Mode::ChaseColor { pd: Pd(1, 2), beam: BeamPattern::Twisting },
             (5, 5) => s.mode = Mode::Chase { pd: Pd(1, 1), beam: BeamPattern::Twisting },
             (6, 5) => s.mode = Mode::Chase { pd: Pd(1, 2), beam: BeamPattern::Twisting },
             (7, 5) => s.mode = Mode::Chase { pd: Pd(1, 4), beam: BeamPattern::Twisting },
@@ -1608,6 +1739,8 @@ pub fn on_ctrl(s: &mut State, l: &mut Lights, ctrl: &mut Midi<LaunchControlXL>, 
 
     match input {
         Input::Slider(0, fr) => s.brightness = fr,
+        Input::Slider(1, fr) => s.duty = fr,
+        Input::Slider(2, fr) => s.phi_mul2 = fr.lerp(0.25..4.0),
 
         // Input::Slider(1, fr) => s.test0 = fr,
         // Input::Slider(2, fr) => s.test1 = fr,
@@ -1641,7 +1774,9 @@ pub fn on_ctrl(s: &mut State, l: &mut Lights, ctrl: &mut Midi<LaunchControlXL>, 
         Input::Control(0, true) => s.palette = Palette::Standard,
         Input::Control(1, true) => s.palette = Palette::Trance,
         Input::Control(2, true) => s.palette = Palette::Redhot,
-        Input::Control(3, true) => s.palette = Palette::Skullsystem,
+        Input::Control(3, true) => s.palette = Palette::Ashton1,
+        Input::Control(4, true) => s.palette = Palette::Ashton2,
+        Input::Control(5, true) => s.palette = Palette::Skullsystem,
 
         _ => {}
     }

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use stagebridge::artnet::Artnet;
 use stagebridge::dmx::device::beam_rgbw_90w::BigBeam;
+// use stagebridge::synesthesia::Synesthesia;
 use std::net::IpAddr;
 
 use stagebridge::color::Rgbw;
-use stagebridge::dmx::device::adj_hex::Hex;
 use stagebridge::dmx::device::bar_rgb_18w::Bar;
 use stagebridge::dmx::device::beam_rgbw_60w::{Beam, BeamRing};
 use stagebridge::dmx::device::laser_scan_30w::{Laser, LaserColor};
@@ -20,7 +20,8 @@ use crate::State;
 
 pub struct Lights {
     e131: E131,
-    artnet: Artnet,
+    // artnet: Artnet,
+    // pub syn: Synesthesia,
     addr: IpAddr,
 
     pub pars: [Par; 10],
@@ -29,14 +30,14 @@ pub struct Lights {
     pub spiders: [Spider; 2],
     pub strobe: Strobe,
     pub laser: Laser,
-    pub hex: [Hex; 14],
 }
 
 impl Lights {
     pub fn new(addr: IpAddr) -> Result<Self> {
         Ok(Self {
-            artnet: Artnet::new("10.0.0.11")?,
             e131: E131::new()?,
+            // artnet: Artnet::new("10.0.0.11")?,
+            // syn: Synesthesia::new("0.0.0.0:1337", "192.168.1.174:6000")?,
             addr,
             pars: Default::default(),
             beams: Default::default(),
@@ -44,7 +45,6 @@ impl Lights {
             bars: Default::default(),
             spiders: Default::default(),
             laser: Default::default(),
-            hex: Default::default(),
         })
     }
 
@@ -94,11 +94,11 @@ impl Lights {
         {
             let mut dmx = [0u8; 90];
 
-            for (i, hex) in self.hex.iter().enumerate() {
-                hex.encode(&mut dmx[6 * i..]);
-            }
+            // for (i, hex) in self.hex.iter().enumerate() {
+            //     hex.encode(&mut dmx[6 * i..]);
+            // }
 
-            self.artnet.send(&dmx)
+            // self.artnet.send(&dmx)
         }
     }
 }
@@ -113,7 +113,7 @@ impl Lights {
             spider.color1 = col1;
         });
         self.for_each_bar(|bar, i, fr| bar.color = col1.into());
-        self.for_each_hex(|hex, i, fr| hex.color = col0.into());
+        // self.for_each_hex(|hex, i, fr| hex.color = col0.into());
         self.strobe.color = col0.into();
     }
 
@@ -126,7 +126,7 @@ impl Lights {
             spider.color1 = f(spider.color1);
         });
         self.for_each_bar(|bar, i, fr| bar.color = f(bar.color.into()).into());
-        self.for_each_hex(|hex, i, fr| hex.color = f(hex.color.into()).into());
+        // self.for_each_hex(|hex, i, fr| hex.color = f(hex.color.into()).into());
         self.strobe.color = f(self.strobe.color.into()).into();
     }
 
@@ -143,9 +143,9 @@ impl Lights {
     pub fn for_each_spider(&mut self, f: impl FnMut(&mut Spider, usize, f64)) {
         Self::for_each(&mut self.spiders, f);
     }
-    pub fn for_each_hex(&mut self, f: impl FnMut(&mut Hex, usize, f64)) {
-        Self::for_each(&mut self.hex, f);
-    }
+    // pub fn for_each_hex(&mut self, f: impl FnMut(&mut Hex, usize, f64)) {
+    //     Self::for_each(&mut self.hex, f);
+    // }
 
     fn for_each<T>(slice: &mut [T], mut f: impl FnMut(&mut T, usize, f64)) {
         let n = slice.len();
