@@ -39,9 +39,9 @@ enum Color {
 }
 
 #[derive(Clone, Copy)]
-struct Swatch {
-    xy: (i8, i8),
-    op: Op,
+pub struct Swatch<T> {
+    pub xy: (i8, i8),
+    pub op: T,
 }
 
 #[derive(Clone, Copy)]
@@ -53,7 +53,7 @@ enum Op {
 }
 
 #[rustfmt::skip]
-const PALETTE: &[Swatch] = &[
+const PALETTE: &[Swatch<Op>] = &[
     /* ───────── colors ───────── */
     Swatch { xy: (0, 7), op: Op::Color(Color::RedShift) },
     Swatch { xy: (1, 7), op: Op::Color(Color::GreenShift) },

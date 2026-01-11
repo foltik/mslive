@@ -2,24 +2,57 @@ use stagebridge::color::{Rgb, Rgbw};
 use stagebridge::num::Interp;
 
 use crate::lights::Lights;
+use crate::State;
 
-pub fn render(l: &Lights, ctx: &egui::Context) {
+pub fn render(s: &State, l: &Lights, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
         let size = ui.available_size();
         let (_response, painter) = ui.allocate_painter(size, egui::Sense::hover());
-        render_inner(l, &painter, size.x as f64, size.y as f64);
+        render_inner(s, l, &painter, size.x as f64, size.y as f64);
     });
 }
 
-fn render_inner(l: &Lights, p: &egui::Painter, w0: f64, h0: f64) {
+fn render_inner(s: &State, l: &Lights, p: &egui::Painter, w0: f64, h0: f64) {
     // bounds
     let w = w0 * 0.9;
     let h = h0 * 0.9;
     let x0 = (w0 - w) * 0.5;
     let y0 = (h0 - h) * 0.5;
 
+    // pages
+    for i in 0..s.pages.len() {
+        rect(
+            p,
+            if s.page == i { Rgbw::WHITE } else { Rgbw::BLACK },
+            x0 + (w * 0.05 * i as f64),
+            y0 + (h * 0.05),
+            20.0,
+            20.0,
+        )
+    }
+
+    // Brightness
+    rect(p, Rgbw::BLACK, x0, y0 + (h * 0.2), 10.0, 60.0);
+    rect(p, Rgbw::WHITE, x0, y0 + (h * 0.2) + 30.0 - (30.0 * s.brightness), 10.0, 60.0 * s.brightness);
+    // Brightness Ceiling
+    rect(p, Rgbw::BLACK, x0 + 15.0, y0 + (h * 0.2), 10.0, 60.0);
+    rect(
+        p,
+        Rgbw::WHITE,
+        x0 + 15.0,
+        y0 + (h * 0.2) + 30.0 - (30.0 * s.brightness_ceil),
+        10.0,
+        60.0 * s.brightness_ceil,
+    );
+
+    // TODO: why no worky
+    // text(p, &format!("{:?}", s.presets.preset), 32.0, x0 + (w * 0.5), y0 + (h * 0.5));
+    // if let Page::Presets = s.page {
+    // text(p, &format!("{:?}", s.presets.preset), 32.0, x0 + (w * 0.5), y0 + (h * 0.5));
+    // }
+
     // booth
-    rect(p, Rgbw::BLACK, x0 + (w * 0.5), y0 + h, 350.0, 75.0);
+    rect(p, Rgbw::BLACK, x0 + (w * 0.5), y0 + h, 350.0, 50.0);
 
     // rgbw bars
     let bar_len = 100.0;
@@ -47,6 +80,17 @@ fn render_inner(l: &Lights, p: &egui::Painter, w0: f64, h0: f64) {
         }
     }
 }
+
+// TODO: why no worky
+// fn text(p: &egui::Painter, s: &str, size: f64, x: f64, y: f64) {
+//     p.text(
+//         egui::Pos2::new(x as f32, y as f32),
+//         egui::Align2::LEFT_CENTER,
+//         s,
+//         egui::FontId::proportional(size as f32),
+//         color(Rgb::WHITE),
+//     );
+// }
 
 fn circle(p: &egui::Painter, c: Rgbw, x: f64, y: f64, r: f64) {
     p.circle_filled(egui::Pos2::new(x as f32, y as f32), r as f32, color(c));
